@@ -12,6 +12,7 @@ import com.fongmi.android.tv.databinding.DialogMenuBinding;
 import com.fongmi.android.tv.ui.activity.HistoryActivity;
 import com.fongmi.android.tv.ui.activity.HomeActivity;
 import com.fongmi.android.tv.ui.activity.KeepActivity;
+import com.fongmi.android.tv.ui.activity.LiveActivity;
 import com.fongmi.android.tv.ui.activity.PushActivity;
 import com.fongmi.android.tv.ui.activity.SearchActivity;
 import com.fongmi.android.tv.ui.activity.SettingActivity;
@@ -78,11 +79,12 @@ public class MenuDialog implements MenuAdapter.OnClickListener {
         if (dialog != null) dialog.dismiss();
         if (position == 0 && activity instanceof HomeActivity) SiteDialog.create(activity).show();
         else if (position == 1 && activity instanceof HomeActivity) HistoryDialog.create(activity).type(0).show();
-        else if (position == 2) HistoryActivity.start(activity);
-        else if (position == 3) SearchActivity.start(activity);
-        else if (position == 4) PushActivity.start(activity);
-        else if (position == 5) KeepActivity.start(activity);
-        else if (position == 6) SettingActivity.start(activity);
+        else if (position == 2) LiveActivity.start(activity);
+        else if (position == 3) HistoryActivity.start(activity);
+        else if (position == 4) SearchActivity.start(activity);
+        else if (position == 5) PushActivity.start(activity);
+        else if (position == 6) KeepActivity.start(activity);
+        else if (position == 7) SettingActivity.start(activity);
     }
 
 }
