@@ -77,6 +77,11 @@ public class CustomWebView extends WebView {
         setWebViewClient(webViewClient());
     }
 
+    private void addView() {
+        ViewGroup.LayoutParams layoutParams = new ViewGroup.LayoutParams(1, 1);
+        if (App.activity() != null) App.activity().addContentView(this, layoutParams);
+    }
+
     public CustomWebView start(String key, String from, Map<String, String> headers, String url, String click, ParseCallback callback, boolean detect) {
         App.post(timer, Constant.TIMEOUT_PARSE_WEB);
         this.callback = callback;
@@ -84,6 +89,7 @@ public class CustomWebView extends WebView {
         this.click = click;
         this.from = from;
         this.key = key;
+        addView();
         start(url, headers);
         return this;
     }
