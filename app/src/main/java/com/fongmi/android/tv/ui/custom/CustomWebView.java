@@ -148,7 +148,7 @@ public class CustomWebView extends WebView {
 
     private void showDialog() {
         if (dialog != null || App.activity() == null) return;
-        if (getParent() != null) ((ViewGroup) getParent()).removeView(this);
+        removeView();
         dialog = new AlertDialog.Builder(App.activity()).setView(this).show();
     }
 
@@ -206,8 +206,13 @@ public class CustomWebView extends WebView {
         callback = null;
     }
 
+    private void removeView() {
+        if (getParent() != null) ((ViewGroup) getParent()).removeView(this);
+    }
+
     public void stop(boolean error) {
         hideDialog();
+        removeView();
         stopLoading();
         loadUrl(BLANK);
         App.removeCallbacks(timer);
