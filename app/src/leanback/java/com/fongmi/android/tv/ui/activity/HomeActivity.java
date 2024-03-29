@@ -482,11 +482,12 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
             if (Setting.getHomeMenuKey() == 0) MenuDialog.create(this).show();
             else if (Setting.getHomeMenuKey() == 1) SiteDialog.create(this).show();
             else if (Setting.getHomeMenuKey() == 2) HistoryDialog.create(this).type(0).show();
-            else if (Setting.getHomeMenuKey() == 3) HistoryActivity.start(this);
-            else if (Setting.getHomeMenuKey() == 4) SearchActivity.start(this);
-            else if (Setting.getHomeMenuKey() == 5) PushActivity.start(this);
-            else if (Setting.getHomeMenuKey() == 6) KeepActivity.start(this);
-            else if (Setting.getHomeMenuKey() == 7) SettingActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 3) LiveActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 4) HistoryActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 5) SearchActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 6) PushActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 7) KeepActivity.start(this);
+            else if (Setting.getHomeMenuKey() == 8) SettingActivity.start(this);
         }
         if (!isHomeFragment && KeyUtil.isMenuKey(event)) updateFilter((Class) mAdapter.get(mBinding.pager.getCurrentItem()));
         if (!isHomeFragment && KeyUtil.isBackKey(event) && event.isLongPress() && getFragment().goRoot()) setCoolDown();
@@ -563,7 +564,7 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
         public Fragment getItem(int position) {
             if (position == 0) return new HomeFragment();
             Class type = (Class) mAdapter.get(position);
-            return VodFragment.newInstance(getHome().getKey(), type.getTypeId(), type.getStyle(), type.getExtend(false), type.getTypeFlag().equals("1"));
+            return VodFragment.newInstance(getHome().getKey(), type.getTypeId(), type.getStyle(), type.getExtend(false), "1".equals(type.getTypeFlag()));
         }
 
         @Override
