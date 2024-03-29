@@ -78,8 +78,8 @@ public class CustomWebView extends WebView {
     }
 
     private void addView() {
-        ViewGroup.LayoutParams layoutParams = new ViewGroup.LayoutParams(1, 1);
-        if (App.activity() != null) App.activity().addContentView(this, layoutParams);
+        ViewGroup.LayoutParams params = new ViewGroup.LayoutParams(1, 1);
+        if (App.activity() != null) App.activity().addContentView(this, params);
     }
 
     public CustomWebView start(String key, String from, Map<String, String> headers, String url, String click, ParseCallback callback, boolean detect) {
