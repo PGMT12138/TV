@@ -68,7 +68,7 @@ public class MenuDialog implements MenuAdapter.OnClickListener {
         binding.recycler.setAdapter(adapter);
         binding.recycler.setHasFixedSize(true);
         binding.recycler.setItemAnimator(null);
-        binding.recycler.addItemDecoration(new SpaceItemDecoration(1, 16));
+        binding.recycler.addItemDecoration(new SpaceItemDecoration(getCount(), 16));
         binding.recycler.setLayoutManager(new GridLayoutManager(dialog.getContext(), getCount()));
         binding.recycler.post(() -> binding.recycler.scrollToPosition(0));
 
