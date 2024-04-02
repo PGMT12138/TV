@@ -148,9 +148,9 @@ public class CustomWebView extends WebView {
         return new WebChromeClient() {
             @Override
             public Bitmap getDefaultVideoPoster() {
-                try{
+                try {
                     return BitmapFactory.decodeResource(App.get().getResources(), R.drawable.ic_logo);
-                } catch (Throwable e){
+                } catch (Throwable e) {
                     return super.getDefaultVideoPoster();
                 }
             }
