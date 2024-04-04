@@ -6,17 +6,19 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
-import android.net.http.SslError;
 import android.text.TextUtils;
 import android.view.ViewGroup;
-import android.webkit.CookieManager;
-import android.webkit.SslErrorHandler;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
+import com.fongmi.android.tv.utils.Notify;
+import com.tencent.smtt.export.external.interfaces.SslError;
+import com.tencent.smtt.export.external.interfaces.SslErrorHandler;
+import com.tencent.smtt.export.external.interfaces.WebResourceRequest;
+import com.tencent.smtt.export.external.interfaces.WebResourceResponse;
+import com.tencent.smtt.sdk.CookieManager;
+import com.tencent.smtt.sdk.QbSdk;
+import com.tencent.smtt.sdk.WebChromeClient;
+import com.tencent.smtt.sdk.WebView;
+import com.tencent.smtt.sdk.WebViewClient;
 
 import androidx.annotation.NonNull;
 
@@ -52,12 +54,23 @@ public class CustomWebView extends WebView {
     private String key;
 
     public static CustomWebView create(@NonNull Context context) {
+        initTbs();
         return new CustomWebView(context);
     }
 
     public CustomWebView(@NonNull Context context) {
         super(context);
         initSettings();
+        showTbs();
+    }
+
+    private static void initTbs() {
+        if (Setting.getParseWebView() == 0) QbSdk.forceSysWebView();
+        else QbSdk.unForceSysWebView();
+    }
+
+    private void showTbs() {
+        if (this.getIsX5Core())  Notify.show(R.string.x5webview_parsing);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
