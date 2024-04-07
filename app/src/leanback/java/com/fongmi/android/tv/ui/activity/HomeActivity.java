@@ -106,13 +106,13 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
         mClock = Clock.create(mBinding.time).format("MM/dd HH:mm:ss");
         Updater.get().release().start(this);
         Server.get().start();
+        Tbs.init();
         setTitleView();
         setRecyclerView();
         setViewModel();
         setHomeType();
         setPager();
         initConfig();
-        Tbs.init();
     }
 
     @Override
