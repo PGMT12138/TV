@@ -158,7 +158,7 @@
 
     <!-- X5 WebView -->
     <string name="x5webview_title">X5 WebView</string>
-    <string name="x5webview_download_enable">下载X5 WebView並啟用?</string>
+    <string name="x5webview_download_enable">解壓X5 WebView並啟用?</string>
     <string name="x5webview_enabled">X5 WebView已啟用</string>
     <string name="x5webview_parsing">X5 WebView嗅探中</string>
 
