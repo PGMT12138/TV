@@ -73,6 +73,14 @@ android {
         }
     }
 
+    android.applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release' && variant.productFlavors[0].name == 'mobile') {
+            variant.mergeAssets.doLast {
+                delete(fileTree(dir: variant.mergeAssets.outputDir, includes: ['x5.tbs.apk']))
+            }
+        }
+    }
+
     configurations.configureEach {
         resolutionStrategy {
             force 'com.squareup.okhttp3:okhttp:' + okhttpVersion
