@@ -10,6 +10,7 @@ import com.github.catvod.utils.Path;
 import com.orhanobut.logger.Logger;
 import com.tencent.smtt.sdk.QbSdk;
 import com.tencent.smtt.sdk.TbsCommonCode;
+import com.tencent.smtt.sdk.TbsDownloader;
 import com.tencent.smtt.sdk.TbsListener;
 import com.tencent.smtt.export.external.TbsCoreSettings;
 
@@ -34,36 +35,7 @@ public class Tbs {
         HashMap map = new HashMap();
         map.put(TbsCoreSettings.TBS_SETTINGS_USE_PRIVATE_CLASSLOADER, true);
         QbSdk.initTbsSettings(map);
-        QbSdk.setDownloadWithoutWifi(false);
-        QbSdk.setCoreMinVersion(QbSdk.CORE_VER_ENABLE_202207);
-        TbsListener tbsListener = new TbsListener() {
-
-            /**
-             * @param stateCode 用户可处理错误码请参考{@link com.tencent.smtt.sdk.TbsCommonCode}
-             */
-            @Override
-            public void onDownloadFinish(int stateCode) {
-                Logger.t(TAG).d("onDownloadFinish:" + stateCode);
-            }
-
-            /**
-             * @param stateCode 用户可处理错误码请参考{@link com.tencent.smtt.sdk.TbsCommonCode}
-             */
-            @Override
-            public void onInstallFinish(int stateCode) {
-                Logger.t(TAG).d("onInstallFinish:" + stateCode);
-            }
-
-            /**
-             * 首次安装应用，会触发内核下载，此时会有内核下载的进度回调。
-             * @param progress 0 - 100
-             */
-            @Override
-            public void onDownloadProgress(int progress) {
-                Logger.t(TAG).d("onDownloadProgress:" + progress);
-            }
-        };
-        QbSdk.setTbsListener(tbsListener);
+        TbsDownloader.stopDownload();
         QbSdk.PreInitCallback callback = new QbSdk.PreInitCallback() {
             @Override
             public void onViewInitFinished(boolean finished) {
