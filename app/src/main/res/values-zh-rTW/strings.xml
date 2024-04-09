@@ -276,10 +276,8 @@
 
     <string-array name="select_config_cache">
         <item>關閉</item>
-        <item>1小時</item>
-        <item>2小時</item>
-        <item>3小時</item>
-        <item>4小時</item>
+        <item>12小時</item>
+        <item>24小時</item>
     </string-array>
 
     <string-array name="select_caption">

@@ -474,7 +474,7 @@ public class Setting {
     }
 
     public static int getConfigCache() {
-        return Math.min(Prefers.getInt("config_cache", 0), 8);
+        return Math.min(Prefers.getInt("config_cache", 0), 2);
     }
 
     public static void putParseWebView(int key) {
