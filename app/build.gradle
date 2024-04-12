@@ -11,7 +11,7 @@ android {
         minSdk 21
         targetSdk 28
         versionCode 232
-        versionName "0408"
+        versionName "0412"
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = ["room.schemaLocation": "$projectDir/schemas".toString()]
@@ -70,6 +70,14 @@ android {
     android.applicationVariants.configureEach { variant ->
         variant.outputs.configureEach { output ->
             outputFileName = "${variant.productFlavors[0].name}-${variant.productFlavors[1].name}-${variant.productFlavors[2].name}.apk"
+        }
+    }
+
+    android.applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release' && variant.productFlavors[0].name == 'mobile') {
+            variant.mergeAssets.doLast {
+                delete(fileTree(dir: variant.mergeAssets.outputDir, includes: ['x5.tbs.apk']))
+            }
         }
     }
 
