@@ -31,6 +31,7 @@ import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.impl.ParseCallback;
 import com.fongmi.android.tv.utils.Sniffer;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkCookieJar;
 import com.google.common.net.HttpHeaders;
 import com.orhanobut.logger.Logger;
 
@@ -113,7 +114,7 @@ public class CustomWebView extends WebView {
 
     private void checkHeader(String url, Map<String, String> headers) {
         for (String key : headers.keySet()) {
-            if (HttpHeaders.COOKIE.equalsIgnoreCase(key)) CookieManager.getInstance().setCookie(url, headers.get(key));
+            if (HttpHeaders.COOKIE.equalsIgnoreCase(key)) OkCookieJar.sync(url, headers.get(key));
             if (HttpHeaders.USER_AGENT.equalsIgnoreCase(key)) getSettings().setUserAgentString(headers.get(key));
         }
     }
