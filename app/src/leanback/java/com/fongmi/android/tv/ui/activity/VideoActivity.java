@@ -250,7 +250,8 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
     }
 
     private Flag getFlag() {
-        return (Flag) mFlagAdapter.get(mBinding.flag.getSelectedPosition());
+        int position = mBinding.flag.getSelectedPosition();
+        return (Flag) mFlagAdapter.get(position < 0 ? 0 : position);
     }
 
     private Episode getEpisode() {
