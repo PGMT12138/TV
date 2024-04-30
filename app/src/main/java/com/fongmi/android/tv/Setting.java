@@ -7,6 +7,8 @@ import android.provider.Settings;
 import com.fongmi.android.tv.player.Players;
 import com.github.catvod.utils.Prefers;
 
+import java.util.Locale;
+
 public class Setting {
 
     public static String getDoh() {
@@ -477,6 +479,27 @@ public class Setting {
         return Math.min(Prefers.getInt("config_cache", 0), 2);
     }
 
+    public static void putLanguage(int key) {
+        Prefers.put("language", key);
+    }
+
+    private static int getLocalLanguage() {
+        if (Locale.getDefault().getLanguage().equals("zh")) {
+            if (Locale.getDefault().getCountry().equals("TW")) {
+                return 2;
+            } else {
+                return 1;
+            }
+        } else {
+            return 0;
+        }
+    }
+
+    public static int getLanguage() {
+        int defaultValue = getLocalLanguage();
+        return Prefers.getInt("language", defaultValue);
+    }
+
     public static void putParseWebView(int key) {
         Prefers.put("parse_webview", key);
     }
@@ -484,4 +507,6 @@ public class Setting {
     public static int getParseWebView() {
         return Prefers.getInt("parse_webview", 0);
     }
+
+
 }
