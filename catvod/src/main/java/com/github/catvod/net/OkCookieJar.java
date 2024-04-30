@@ -1,8 +1,8 @@
 package com.github.catvod.net;
 
 import android.text.TextUtils;
-import android.webkit.CookieManager;
-import android.webkit.WebView;
+import com.tencent.smtt.sdk.CookieManager;
+import com.tencent.smtt.sdk.WebView;
 
 import androidx.annotation.NonNull;
 
