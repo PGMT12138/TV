@@ -2,8 +2,6 @@ package com.fongmi.quickjs.utils;
 
 import android.util.Base64;
 
-import com.github.catvod.utils.Util;
-
 import java.security.Key;
 import java.security.KeyFactory;
 import java.security.PublicKey;
@@ -16,6 +14,7 @@ import java.util.Arrays;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import com.github.catvod.utils.Util;
 
 public class Crypto {
 
