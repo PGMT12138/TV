@@ -1,6 +1,7 @@
 package com.fongmi.quickjs.utils;
 
 import com.fongmi.quickjs.bean.Req;
+import com.github.catvod.net.OkCookieJar;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Util;
@@ -75,7 +76,7 @@ public class Connect {
     }
 
     private static RequestBody getJsonBody(Req req) {
-        return RequestBody.create(req.getData().toString(), MediaType.get("application/json"));
+        return RequestBody.create(req.getData().toString(), MediaType.get("application/json; charset=utf-8"));
     }
 
     private static RequestBody getRawBody(Req req) {
