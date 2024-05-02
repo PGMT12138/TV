@@ -13,8 +13,8 @@ import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.databinding.FragmentSettingCustomBinding;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.ui.base.BaseFragment;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
+import com.fongmi.android.tv.utils.Util;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.Locale;
@@ -122,7 +122,7 @@ public class SettingCustomFragment extends BaseFragment {
             mBinding.languageText.setText(lang[which]);
             Setting.putLanguage(which);
             dialog.dismiss();
-            LanguageUtil.restartApp(getActivity());
+            Util.restartApp(getActivity());
         }).show();
     }
 
