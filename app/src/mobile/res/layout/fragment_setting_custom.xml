@@ -220,14 +220,14 @@
                     android:layout_marginEnd="16dp"
                     android:text="@string/setting_language"
                     android:textColor="@color/white"
-                    android:textSize="18sp" />
+                    android:textSize="16sp" />
                 <TextView
                     android:id="@+id/languageText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="end"
                     android:textColor="@color/white"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     tools:text="中文" />
             </LinearLayout>
 
