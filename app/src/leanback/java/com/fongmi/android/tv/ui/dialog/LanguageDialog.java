@@ -13,8 +13,8 @@ import com.fongmi.android.tv.databinding.DialogMenuBinding;
 import com.fongmi.android.tv.ui.activity.SettingCustomActivity;
 import com.fongmi.android.tv.ui.adapter.MenuAdapter;
 import com.fongmi.android.tv.ui.custom.SpaceItemDecoration;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
+import com.fongmi.android.tv.utils.Util;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
@@ -82,6 +82,6 @@ public class LanguageDialog implements MenuAdapter.OnClickListener {
         if (dialog != null) dialog.dismiss();
         Setting.putLanguage(position);
         ((SettingCustomActivity) activity).setLanguageText();
-        LanguageUtil.restartApp(activity);
+        Util.restartApp(activity);
     }
 }
