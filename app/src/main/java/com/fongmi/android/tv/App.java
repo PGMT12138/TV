@@ -85,7 +85,7 @@ public class App extends Application {
 
     private void setActivity(Activity activity) {
         this.activity = activity;
-        LanguageUtil.setLanguage(getResources(),Setting.getLanguage());
+        LanguageUtil.setLanguage(getResources(), Setting.getLanguage());
     }
 
     private LogAdapter getLogAdapter() {

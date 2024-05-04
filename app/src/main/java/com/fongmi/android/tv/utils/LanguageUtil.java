@@ -1,7 +1,5 @@
 package com.fongmi.android.tv.utils;
 
-import android.app.Activity;
-import android.content.Intent;
 import android.content.res.Resources;
 
 import java.util.Locale;
