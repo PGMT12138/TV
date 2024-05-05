@@ -21,6 +21,7 @@ import androidx.viewbinding.ViewBinding;
 import androidx.viewpager.widget.ViewPager;
 
 import com.android.cast.dlna.dmr.DLNARendererService;
+import com.bumptech.glide.Glide;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
@@ -41,6 +42,7 @@ import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.event.ServerEvent;
 import com.fongmi.android.tv.impl.Callback;
 import com.fongmi.android.tv.impl.ConfigCallback;
+import com.fongmi.android.tv.impl.RestoreCallback;
 import com.fongmi.android.tv.model.SiteViewModel;
 import com.fongmi.android.tv.player.Source;
 import com.fongmi.android.tv.server.Server;
@@ -48,6 +50,7 @@ import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.custom.CustomTitleView;
 import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.MenuDialog;
+import com.fongmi.android.tv.ui.dialog.RestoreDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
 import com.fongmi.android.tv.ui.fragment.HomeFragment;
 import com.fongmi.android.tv.ui.fragment.VodFragment;
@@ -71,7 +74,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class HomeActivity extends BaseActivity implements CustomTitleView.Listener, TypePresenter.OnClickListener, ConfigCallback {
+public class HomeActivity extends BaseActivity implements CustomTitleView.Listener, RestoreCallback,  TypePresenter.OnClickListener, ConfigCallback {
 
     public ActivityHomeBinding mBinding;
     private ArrayObjectAdapter mAdapter;
@@ -317,26 +320,28 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
             public void success() {
                 checkAction(getIntent());
                 RefreshEvent.video();
+                setLogo();
                 if (!TextUtils.isEmpty(success)) Notify.show(success);
             }
 
             @Override
             public void error(String msg) {
-                if (TextUtils.isEmpty(msg) && AppDatabase.getBackup().exists()) onRestore();
-                else if (getHomeFragment().init) getHomeFragment().mBinding.progressLayout.showContent();
-                else App.post(() -> getHomeFragment().mBinding.progressLayout.showContent(), 1000);
+                if (TextUtils.isEmpty(msg) && AppDatabase.getBackup().exists()) RestoreDialog.create(getActivity()).show();
+                getHomeFragment().mBinding.progressLayout.showContent();
                 mResult = Result.empty();
                 Notify.show(msg);
+                setFocus();
             }
         };
     }
 
-    private void onRestore() {
+    @Override
+    public void onRestore() {
         PermissionX.init(this).permissions(Manifest.permission.WRITE_EXTERNAL_STORAGE).request((allGranted, grantedList, deniedList) -> AppDatabase.restore(new Callback() {
             @Override
             public void success() {
+                if (allGranted) getHomeFragment().mBinding.progressLayout.showProgress();
                 if (allGranted) initConfig();
-                else getHomeFragment().mBinding.progressLayout.showContent();
             }
         }));
     }
@@ -408,6 +413,9 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
     public void onRefreshEvent(RefreshEvent event) {
         super.onRefreshEvent(event);
         switch (event.getType()) {
+            case CONFIG:
+                setLogo();
+                break;
             case VIDEO:
                 homeContent();
                 break;
@@ -449,6 +457,7 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
             @Override
             public void success() {
                 RefreshEvent.history();
+                RefreshEvent.config();
                 RefreshEvent.video();
                 onCastEvent(event);
             }
@@ -475,6 +484,12 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
             if (Setting.getHomeUI() == 0) getHomeFragment().mBinding.recycler.requestFocus();
             else mBinding.recycler.requestFocus();
         }
+    }
+
+    private void setLogo() {
+        String logo = VodConfig.get().getConfig().getLogo();
+        mBinding.logo.setVisibility(TextUtils.isEmpty(logo) ? View.GONE : View.VISIBLE);
+        Glide.with(this).load(logo).error(R.drawable.ic_logo).circleCrop().into(mBinding.logo);
     }
 
     @Override
