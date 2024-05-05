@@ -17,6 +17,7 @@ import androidx.lifecycle.ViewModelProvider;
 import androidx.viewbinding.ViewBinding;
 import androidx.viewpager.widget.ViewPager;
 
+import com.bumptech.glide.Glide;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
@@ -30,6 +31,7 @@ import com.fongmi.android.tv.bean.Value;
 import com.fongmi.android.tv.databinding.FragmentVodBinding;
 import com.fongmi.android.tv.event.CastEvent;
 import com.fongmi.android.tv.event.RefreshEvent;
+import com.fongmi.android.tv.event.StateEvent;
 import com.fongmi.android.tv.impl.Callback;
 import com.fongmi.android.tv.impl.ConfigCallback;
 import com.fongmi.android.tv.impl.FilterCallback;
@@ -271,6 +273,13 @@ public class VodFragment extends BaseFragment implements SiteCallback, FilterCal
         mBinding.pager.setAdapter(new PageAdapter(getChildFragmentManager()));
     }
 
+    private void setLogo() {
+        String logo = VodConfig.get().getConfig().getLogo();
+        if (TextUtils.isEmpty(logo)) mBinding.logo.setImageResource(R.drawable.ic_logo);
+        else Glide.with(this).load(logo).error(R.drawable.ic_logo).circleCrop().into(mBinding.logo);
+    }
+
+
     public Result getResult() {
         return mResult == null ? new Result() : mResult;
     }
@@ -322,15 +331,25 @@ public class VodFragment extends BaseFragment implements SiteCallback, FilterCal
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onRefreshEvent(RefreshEvent event) {
         switch (event.getType()) {
-            case EMPTY:
-                hideProgress();
-                break;
             case VIDEO:
             case SIZE:
                 homeContent();
                 break;
             case CONFIG:
                 setAppBarView();
+                setLogo();
+                break;
+        }
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onStateEvent(StateEvent event) {
+        switch (event.getType()) {
+            case EMPTY:
+                hideProgress();
+                break;
+            case PROGRESS:
+                showProgress();
                 break;
         }
     }
