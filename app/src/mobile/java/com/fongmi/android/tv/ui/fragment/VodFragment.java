@@ -245,7 +245,7 @@ public class VodFragment extends BaseFragment implements SiteCallback, FilterCal
     }
 
     private RequestListener<Drawable> getListener() {
-        return new RequestListener<>() {
+        return new RequestListener<Drawable>() {
             @Override
             public boolean onLoadFailed(@Nullable GlideException e, Object model, @NonNull Target<Drawable> target, boolean isFirstResource) {
                 mBinding.logo.getLayoutParams().width = ResUtil.dp2px(24);
