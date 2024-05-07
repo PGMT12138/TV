@@ -46,7 +46,7 @@ public class SettingCustomFragment extends BaseFragment {
         mBinding.speedText.setText(getSpeedText());
         mBinding.incognitoText.setText(getSwitch(Setting.isIncognito()));
         mBinding.aggregatedSearchText.setText(getSwitch(Setting.isAggregatedSearch()));
-        mBinding.homeChangeConfigText.setText(getSwitch(Setting.isHomeChangeConfig()));
+        mBinding.homeDisplayNameText.setText(getSwitch(Setting.isHomeDisplayName()));
         mBinding.languageText.setText((lang = ResUtil.getStringArray(R.array.select_language))[Setting.getLanguage()]);
     }
 
@@ -59,7 +59,7 @@ public class SettingCustomFragment extends BaseFragment {
         mBinding.speed.setOnLongClickListener(this::resetSpeed);
         mBinding.incognito.setOnClickListener(this::setIncognito);
         mBinding.aggregatedSearch.setOnClickListener(this::setAggregatedSearch);
-        mBinding.homeChangeConfig.setOnClickListener(this::setHomeChangeConfig);
+        mBinding.homeDisplayName.setOnClickListener(this::setHomeDisplayName);
         mBinding.language.setOnClickListener(this::setLanguage);
 
     }
@@ -111,9 +111,9 @@ public class SettingCustomFragment extends BaseFragment {
         mBinding.aggregatedSearchText.setText(getSwitch(Setting.isAggregatedSearch()));
     }
 
-    private void setHomeChangeConfig(View view) {
-        Setting.putHomeChangeConfig(!Setting.isHomeChangeConfig());
-        mBinding.homeChangeConfigText.setText(getSwitch(Setting.isHomeChangeConfig()));
+    private void setHomeDisplayName(View view) {
+        Setting.putHomeDisplayName(!Setting.isHomeDisplayName());
+        mBinding.homeDisplayNameText.setText(getSwitch(Setting.isHomeDisplayName()));
         RefreshEvent.config();
     }
 
