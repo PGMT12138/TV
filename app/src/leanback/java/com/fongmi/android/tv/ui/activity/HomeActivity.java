@@ -487,7 +487,7 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
     }
 
     private RequestListener<Drawable> getListener() {
-        return new RequestListener<>() {
+        return new RequestListener<Drawable>() {
             @Override
             public boolean onLoadFailed(@Nullable GlideException e, Object model, @NonNull Target<Drawable> target, boolean isFirstResource) {
                 mBinding.logo.setVisibility(View.GONE);
