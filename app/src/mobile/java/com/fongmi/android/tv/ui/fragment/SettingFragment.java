@@ -124,6 +124,7 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
         mBinding.wallRefresh.setOnClickListener(this::setWallRefresh);
         mBinding.doh.setOnClickListener(this::setDoh);
         mBinding.custom.setOnClickListener(this::onCustom);
+        mBinding.about.setOnClickListener(this::onAbout);
     }
 
     @Override
@@ -259,6 +260,10 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
 
     private void onCustom(View view) {
         getRoot().change(3);
+    }
+
+    private void onAbout(View view) {
+        mBinding.aboutText.setText(BuildConfig.FLAVOR_mode + "-" + BuildConfig.FLAVOR_api + "-" + BuildConfig.FLAVOR_abi);
     }
 
     private void onVersion(View view) {
