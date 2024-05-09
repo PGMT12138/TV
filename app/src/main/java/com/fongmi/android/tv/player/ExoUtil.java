@@ -140,7 +140,7 @@ public class ExoUtil {
 
     public static MediaSource getSource(Result result, Sub sub, int errorCode) {
         String url = result.getRealUrl();
-        if (url.contains("***")) return getConcatSource(result, sub, errorCode);
+        if (url.contains("***") && url.contains("|||")) return getConcatSource(result, sub, errorCode);
         return getSource(result.getHeaders(), result.getRealUrl(), result.getFormat(), result.getSubs(), sub, null, errorCode);
     }
 
