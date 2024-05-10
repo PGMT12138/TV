@@ -122,25 +122,7 @@ public class ExoUtil {
         return null;
     }
 
-    private static MediaSource getConcatSource(Result result, Sub sub, int errorCode) {
-        String url = result.getRealUrl();
-        String[] urls = url.split("\\*\\*\\*");
-        ConcatenatingMediaSource2.Builder concatenatingMediaSource = new ConcatenatingMediaSource2.Builder();
-        for(String one : urls) {
-            if (TextUtils.isEmpty(one)) continue;
-            String[] oneInfo = one.split("\\|\\|\\|");
-            if (oneInfo.length < 2) continue;
-            String oneUrl = oneInfo[0];
-            String oneDuration = oneInfo[1];
-            long duration = Long.parseLong(oneDuration);
-            concatenatingMediaSource.add(getSource(result.getHeaders(), oneUrl, result.getFormat(), result.getSubs(), sub, null, errorCode), duration);
-        }
-        return concatenatingMediaSource.build();
-    }
-
     public static MediaSource getSource(Result result, Sub sub, int errorCode) {
-        String url = result.getRealUrl();
-        if (url.contains("***") && url.contains("|||")) return getConcatSource(result, sub, errorCode);
         return getSource(result.getHeaders(), result.getRealUrl(), result.getFormat(), result.getSubs(), sub, null, errorCode);
     }
 
@@ -157,12 +139,24 @@ public class ExoUtil {
         if (sub != null) subs.add(sub);
         String mimeType = getMimeType(format, errorCode);
         if (uri.getUserInfo() != null) headers.put(HttpHeaders.AUTHORIZATION, Util.basic(uri.getUserInfo()));
+        if (url.contains("***") && url.contains("|||")) return getConcat(headers, url, format, subs, sub, drm, errorCode);
         return new DefaultMediaSourceFactory(getDataSourceFactory(headers), getExtractorsFactory()).createMediaSource(getMediaItem(uri, mimeType, subs, drm));
+    }
+
+    private static MediaSource getConcat(Map<String, String> headers, String url, String format, List<Sub> subs, Sub sub, Drm drm, int errorCode) {
+        ConcatenatingMediaSource2.Builder builder = new ConcatenatingMediaSource2.Builder();
+        for (String split : url.split("\\*\\*\\*")) {
+            String[] info = split.split("\\|\\|\\|");
+            if (info.length < 2) continue;
+            long duration = Long.parseLong(info[1]);
+            builder.add(getSource(headers, info[0], format, subs, sub, drm, errorCode), duration);
+        }
+        return builder.build();
     }
 
     private static MediaItem getMediaItem(Uri uri, String mimeType, List<Sub> subs, Drm drm) {
         MediaItem.Builder builder = new MediaItem.Builder().setUri(uri);
-        if (subs.size() > 0) builder.setSubtitleConfigurations(getSubtitles(subs));
+        if (!subs.isEmpty()) builder.setSubtitleConfigurations(getSubtitles(subs));
         if (drm != null) builder.setDrmConfiguration(drm.get());
         builder.setAllowChunklessPreparation(Players.isHard(Players.EXO));
         if (mimeType != null) builder.setMimeType(mimeType);
