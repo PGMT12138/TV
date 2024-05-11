@@ -115,6 +115,7 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
         mBinding.wallRefresh.setOnClickListener(this::setWallRefresh);
         mBinding.custom.setOnClickListener(this::onCustom);
         mBinding.doh.setOnClickListener(this::setDoh);
+        mBinding.about.setOnClickListener(this::onAbout);
     }
 
     @Override
@@ -278,6 +279,10 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
 
     private void onCustom(View view) {
         SettingCustomActivity.start(this);
+    }
+
+    private void onAbout(View view) {
+        mBinding.aboutText.setText(BuildConfig.FLAVOR_mode + "-" + BuildConfig.FLAVOR_api + "-" + BuildConfig.FLAVOR_abi);
     }
 
     private void setDoh(View view) {
