@@ -63,6 +63,7 @@ public class SettingCustomActivity extends BaseActivity {
         mBinding.aggregatedSearchText.setText(getSwitch(Setting.isAggregatedSearch()));
         mBinding.homeUIText.setText((homeUI = ResUtil.getStringArray(R.array.select_home_ui))[Setting.getHomeUI()]);
         mBinding.homeHistoryText.setText(getSwitch(Setting.isHomeHistory()));
+        mBinding.removeAdText.setText(getSwitch(Setting.isRemoveAd()));
         mBinding.languageText.setText((ResUtil.getStringArray(R.array.select_language))[Setting.getLanguage()]);
         mBinding.parseWebviewText.setText((parseWebview = ResUtil.getStringArray(R.array.select_parse_webview))[Setting.getParseWebView()]);
         mBinding.configCacheText.setText((configCache = ResUtil.getStringArray(R.array.select_config_cache))[Setting.getConfigCache()]);
@@ -85,6 +86,7 @@ public class SettingCustomActivity extends BaseActivity {
         mBinding.homeUI.setOnClickListener(this::setHomeUI);
         mBinding.homeButtons.setOnClickListener(this::onHomeButtons);
         mBinding.homeHistory.setOnClickListener(this::setHomeHistory);
+        mBinding.removeAd.setOnClickListener(this::setRemoveAd);
         mBinding.setLanguage.setOnClickListener(this::setLanguage);
         mBinding.parseWebview.setOnClickListener(this::setParseWebview);
         mBinding.configCache.setOnClickListener(this::setConfigCache);
@@ -182,6 +184,11 @@ public class SettingCustomActivity extends BaseActivity {
     private void setHomeHistory(View view) {
         Setting.putHomeHistory(!Setting.isHomeHistory());
         mBinding.homeHistoryText.setText(getSwitch(Setting.isHomeHistory()));
+    }
+
+    private void setRemoveAd(View view) {
+        Setting.putRemoveAd(!Setting.isRemoveAd());
+        mBinding.removeAdText.setText(getSwitch(Setting.isRemoveAd()));
     }
 
     private void setLanguage(View view) {
