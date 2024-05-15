@@ -1,8 +1,8 @@
 package com.fongmi.android.tv.ui.custom;
 
 import android.annotation.SuppressLint;
-import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -28,6 +28,7 @@ import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.impl.ParseCallback;
+import com.fongmi.android.tv.ui.dialog.WebDialog;
 import com.fongmi.android.tv.utils.Sniffer;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkCookieJar;
@@ -39,14 +40,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class CustomWebView extends WebView {
+public class CustomWebView extends WebView implements DialogInterface.OnDismissListener {
 
     private static final String TAG = CustomWebView.class.getSimpleName();
     private static final String BLANK = "about:blank";
 
     private WebResourceResponse empty;
     private ParseCallback callback;
-    private AlertDialog dialog;
+    private WebDialog dialog;
     private Runnable timer;
     private boolean detect;
     private String click;
@@ -126,16 +127,10 @@ public class CustomWebView extends WebView {
                 String host = request.getUrl().getHost();
                 Map<String, String> headers = request.getRequestHeaders();
                 if (TextUtils.isEmpty(host) || VodConfig.get().getAds().contains(host)) return empty;
-                if (url.contains("challenges.cloudflare.com/cdn-cgi")) App.post(() -> showDialog());
+                if (url.contains("challenges.cloudflare.com/turnstile")) App.post(() -> showDialog());
                 if (detect && url.contains("player/?url=")) onParseAdd(headers, url);
                 else if (isVideoFormat(url)) onParseSuccess(headers, url);
                 return super.shouldInterceptRequest(view, request);
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                super.onPageStarted(view, url, favicon);
-                if (dialog != null) hideDialog();
             }
 
             @Override
@@ -174,12 +169,18 @@ public class CustomWebView extends WebView {
     private void showDialog() {
         if (dialog != null || App.activity() == null) return;
         if (getParent() != null) ((ViewGroup) getParent()).removeView(this);
-        dialog = new AlertDialog.Builder(App.activity()).setView(this).show();
+        dialog = new WebDialog(this).show();
+        App.removeCallbacks(timer);
     }
 
     private void hideDialog() {
         if (dialog != null) dialog.dismiss();
         dialog = null;
+    }
+
+    @Override
+    public void onDismiss(DialogInterface dialog) {
+        stop(true);
     }
 
     private List<String> getScript(String url) {
