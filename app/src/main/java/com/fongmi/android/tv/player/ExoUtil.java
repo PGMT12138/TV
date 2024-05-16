@@ -44,14 +44,13 @@ import com.fongmi.android.tv.bean.Channel;
 import com.fongmi.android.tv.bean.Drm;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Sub;
-import com.fongmi.android.tv.server.Server;
+import com.fongmi.android.tv.utils.Sniffer;
 import com.fongmi.android.tv.utils.UrlUtil;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Path;
 import com.github.catvod.utils.Util;
 import com.google.common.net.HttpHeaders;
 
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -141,7 +140,6 @@ public class ExoUtil {
         String mimeType = getMimeType(format, errorCode);
         if (uri.getUserInfo() != null) headers.put(HttpHeaders.AUTHORIZATION, Util.basic(uri.getUserInfo()));
         if (url.contains("***") && url.contains("|||")) return getConcat(headers, url, format, subs, sub, drm, errorCode);
-        if (url.contains(".m3u8") && Setting.isRemoveAd()) uri = Uri.parse(Server.get().getAddress().concat("/m3u8?url=").concat(URLEncoder.encode(url)));
         return new DefaultMediaSourceFactory(getDataSourceFactory(headers), getExtractorsFactory()).createMediaSource(getMediaItem(uri, mimeType, subs, drm));
     }
 
@@ -162,6 +160,7 @@ public class ExoUtil {
         if (drm != null) builder.setDrmConfiguration(drm.get());
         builder.setAllowChunklessPreparation(Players.isHard(Players.EXO));
         if (mimeType != null) builder.setMimeType(mimeType);
+        builder.setAds(Sniffer.getRegex(uri));
         return builder.build();
     }
 
