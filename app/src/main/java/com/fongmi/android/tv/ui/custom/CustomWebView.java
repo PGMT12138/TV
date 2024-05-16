@@ -39,6 +39,7 @@ import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 public class CustomWebView extends WebView implements DialogInterface.OnDismissListener {
 
@@ -125,8 +126,8 @@ public class CustomWebView extends WebView implements DialogInterface.OnDismissL
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 String host = request.getUrl().getHost();
+                if (TextUtils.isEmpty(host) || isAd(host)) return empty;
                 Map<String, String> headers = request.getRequestHeaders();
-                if (TextUtils.isEmpty(host) || VodConfig.get().getAds().contains(host)) return empty;
                 if (url.contains("challenges.cloudflare.com/turnstile")) App.post(() -> showDialog());
                 if (detect && url.contains("player/?url=")) onParseAdd(headers, url);
                 else if (isVideoFormat(url)) onParseSuccess(headers, url);
@@ -197,6 +198,12 @@ public class CustomWebView extends WebView implements DialogInterface.OnDismissL
         } else {
             evaluateJavascript(script.get(0), value -> evaluate(script.subList(1, script.size())));
         }
+    }
+
+    private boolean isAd(String host) {
+        for (String ad : VodConfig.get().getAds()) if (host.contains(ad)) return true;
+        for (String ad : VodConfig.get().getAds()) if (Pattern.compile(ad).matcher(host).find()) return true;
+        return false;
     }
 
     private boolean isVideoFormat(String url) {
