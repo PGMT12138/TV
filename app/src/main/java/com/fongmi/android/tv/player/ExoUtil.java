@@ -44,7 +44,6 @@ import com.fongmi.android.tv.bean.Channel;
 import com.fongmi.android.tv.bean.Drm;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Sub;
-import com.fongmi.android.tv.utils.Sniffer;
 import com.fongmi.android.tv.utils.UrlUtil;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Path;
@@ -160,7 +159,6 @@ public class ExoUtil {
         if (drm != null) builder.setDrmConfiguration(drm.get());
         builder.setAllowChunklessPreparation(Players.isHard(Players.EXO));
         if (mimeType != null) builder.setMimeType(mimeType);
-        builder.setAds(Sniffer.getRegex(uri));
         return builder.build();
     }
 
