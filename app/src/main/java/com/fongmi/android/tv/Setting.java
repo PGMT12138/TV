@@ -314,12 +314,12 @@ public class Setting {
         Prefers.put("exo_tunnel", tunnel);
     }
 
-    public static boolean isBackupAuto() {
-        return Prefers.getBoolean("backup_auto");
+    public static int getBackupMode() {
+        return Prefers.getInt("backup_mode");
     }
 
-    public static void putBackupAuto(boolean auto) {
-        Prefers.put("backup_auto", auto);
+    public static void putBackupMode(int auto) {
+        Prefers.put("backup_mode", auto);
     }
 
     public static float getThumbnail() {

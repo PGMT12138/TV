@@ -88,6 +88,10 @@ public class Path {
         return mkdir(new File(cache() + File.separator + "thunder"));
     }
 
+    public static File restore() {
+        return mkdir(new File(cache() + File.separator + "restore"));
+    }
+
     public static File root(String name) {
         return new File(root(), name);
     }
