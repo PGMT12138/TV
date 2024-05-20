@@ -38,6 +38,8 @@ import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.LiveDialog;
 import com.fongmi.android.tv.ui.dialog.ProxyDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
+import com.fongmi.android.tv.ui.dialog.TransmitActionDialog;
+import com.fongmi.android.tv.ui.dialog.TransmitDialog;
 import com.fongmi.android.tv.utils.FileChooser;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.Notify;
@@ -112,6 +114,7 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
         mBinding.proxy.setOnClickListener(this::onProxy);
         mBinding.cache.setOnClickListener(this::onCache);
         mBinding.cache.setOnLongClickListener(this::onCacheLongClick);
+        mBinding.transmit.setOnClickListener(this::onTransmit);
         mBinding.backup.setOnClickListener(this::onBackup);
         mBinding.restore.setOnClickListener(this::onRestore);
         mBinding.player.setOnClickListener(this::onPlayer);
@@ -350,6 +353,10 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
         FileChooser.from(this).show();
     }
 
+    private void onTransmit(View view) {
+        TransmitActionDialog.create(this).show();
+    }
+
     private void initConfig() {
         WallConfig.get().init();
         LiveConfig.get().init().load();
@@ -399,7 +406,8 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != Activity.RESULT_OK || requestCode != FileChooser.REQUEST_PICK_FILE) return;
         String path = FileChooser.getPathFromUri(getContext(), data.getData());
-        if (path.endsWith(AppDatabase.BACKUP_SUFFIX)) restore(new File(path));
+        if (path.toLowerCase().endsWith(".apk")) TransmitDialog.create().apk(path).show(getActivity());
+        else if (path.endsWith(AppDatabase.BACKUP_SUFFIX)) restore(new File(path));
         else setConfig(Config.find("file:/" + path.replace(Path.rootPath(), ""), type));
     }
 }
