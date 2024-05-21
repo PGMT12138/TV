@@ -37,7 +37,12 @@ public class Path {
     }
 
     public static File cache() {
-        return Init.context().getCacheDir();
+        File internal = Init.context().getCacheDir();
+        String dir = Prefers.getString("cache_dir", internal.getAbsolutePath());
+        if (dir.equals(internal.getAbsolutePath())) return internal;
+        File cache = new File(dir);
+        if (!cache.exists()) return internal;
+        return cache;
     }
 
     public static File files() {

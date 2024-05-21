@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.activity;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.view.View;
@@ -13,6 +14,7 @@ import com.fongmi.android.tv.databinding.ActivitySettingCustomBinding;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.ButtonsDialog;
+import com.fongmi.android.tv.ui.dialog.CacheDirDialog;
 import com.fongmi.android.tv.ui.dialog.DisplayDialog;
 import com.fongmi.android.tv.ui.dialog.LanguageDialog;
 import com.fongmi.android.tv.ui.dialog.MenuKeyDialog;
@@ -20,6 +22,7 @@ import com.fongmi.android.tv.ui.dialog.X5WebViewDialog;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.github.catvod.utils.Shell;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.permissionx.guolindev.PermissionX;
 import com.tencent.smtt.sdk.QbSdk;
 import java.util.Locale;
 
@@ -63,6 +66,7 @@ public class SettingCustomActivity extends BaseActivity {
         mBinding.aggregatedSearchText.setText(getSwitch(Setting.isAggregatedSearch()));
         mBinding.homeUIText.setText((homeUI = ResUtil.getStringArray(R.array.select_home_ui))[Setting.getHomeUI()]);
         mBinding.homeHistoryText.setText(getSwitch(Setting.isHomeHistory()));
+        mBinding.cacheDirText.setText(Setting.getCacheDir());
         mBinding.removeAdText.setText(getSwitch(Setting.isRemoveAd()));
         mBinding.languageText.setText((ResUtil.getStringArray(R.array.select_language))[Setting.getLanguage()]);
         mBinding.parseWebviewText.setText((parseWebview = ResUtil.getStringArray(R.array.select_parse_webview))[Setting.getParseWebView()]);
@@ -90,8 +94,8 @@ public class SettingCustomActivity extends BaseActivity {
         mBinding.setLanguage.setOnClickListener(this::setLanguage);
         mBinding.parseWebview.setOnClickListener(this::setParseWebview);
         mBinding.configCache.setOnClickListener(this::setConfigCache);
+        mBinding.cacheDir.setOnClickListener(this::setCacheDir);
         mBinding.reset.setOnClickListener(this::onReset);
-
     }
 
     private void setQuality(View view) {
@@ -189,6 +193,18 @@ public class SettingCustomActivity extends BaseActivity {
     private void setRemoveAd(View view) {
         Setting.putRemoveAd(!Setting.isRemoveAd());
         mBinding.removeAdText.setText(getSwitch(Setting.isRemoveAd()));
+    }
+
+    private void setCacheDir(View view) {
+        PermissionX.init(this).permissions(Manifest.permission.WRITE_EXTERNAL_STORAGE).request((allGranted, grantedList, deniedList) -> {
+            if (allGranted) {
+                CacheDirDialog.create(this).show();
+            }
+        });
+    }
+
+    public void setCacheDirText() {
+        mBinding.cacheDirText.setText(Setting.getCacheDir());
     }
 
     private void setLanguage(View view) {
