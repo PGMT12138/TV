@@ -3,7 +3,6 @@ package com.fongmi.android.tv.ui.activity;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.util.Base64;
 import android.view.View;
 
 import androidx.viewbinding.ViewBinding;

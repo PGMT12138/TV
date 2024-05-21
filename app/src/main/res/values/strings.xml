@@ -76,6 +76,7 @@
     <string name="setting_danmu">Danmu setting</string>
     <string name="setting_custom">Custom setting</string>
     <string name="setting_config_cache">Config cache</string>
+    <string name="setting_cache_dir">Thunder cache</string>
     <string name="setting_reset">Reset app</string>
     <string name="setting_quality">Image quality</string>
     <string name="setting_size">Image size</string>

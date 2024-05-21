@@ -40,6 +40,15 @@ public class Path {
         return Init.context().getCacheDir();
     }
 
+    public static File thunderCache() {
+        File internal = Init.context().getCacheDir();
+        String dir = Prefers.getString("thunder_cache_dir", internal.getAbsolutePath());
+        if (dir.equals(internal.getAbsolutePath())) return internal;
+        File cache = new File(dir);
+        if (!cache.exists()) return internal;
+        return cache;
+    }
+
     public static File files() {
         return Init.context().getFilesDir();
     }
@@ -85,7 +94,7 @@ public class Path {
     }
 
     public static File thunder() {
-        return mkdir(new File(cache() + File.separator + "thunder"));
+        return mkdir(new File(thunderCache() + File.separator + "thunder"));
     }
 
     public static File restore() {

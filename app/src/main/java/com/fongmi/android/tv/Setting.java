@@ -502,4 +502,12 @@ public class Setting {
         Prefers.put("remove_ad", remove);
     }
 
+    public static String getThunderCacheDir() {
+        return Prefers.getString("thunder_cache_dir", "");
+    }
+
+    public static void putThunderCacheDir(String dir) {
+        Prefers.put("thunder_cache_dir", dir);
+    }
+
 }
