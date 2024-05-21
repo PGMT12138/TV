@@ -76,7 +76,7 @@
     <string name="setting_danmu">彈幕設定</string>
     <string name="setting_custom">個性設定</string>
     <string name="setting_config_cache">接口暫存</string>
-    <string name="setting_cache_dir">暫存目錄</string>
+    <string name="setting_cache_dir">迅雷暫存</string>
     <string name="setting_reset">重置App</string>
     <string name="setting_quality">圖片品質</string>
     <string name="setting_size">圖片尺寸</string>

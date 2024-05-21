@@ -13,7 +13,7 @@ import java.util.List;
 
 public class CacheDirAdapter extends RecyclerView.Adapter<CacheDirAdapter.ViewHolder> {
 
-    private final OnClickListener mListener;
+    private final CacheDirAdapter.OnClickListener mListener;
     private List<String> mItems;
 
     public CacheDirAdapter(OnClickListener listener, List<String> items) {
@@ -41,7 +41,7 @@ public class CacheDirAdapter extends RecyclerView.Adapter<CacheDirAdapter.ViewHo
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         String item = mItems.get(position);
-        boolean selected = Setting.getCacheDir().equals(item);
+        boolean selected = Setting.getThunderCacheDir().equals(item);
         holder.binding.text.setText(item);
         holder.binding.text.setSelected(selected);
         holder.binding.text.setActivated(selected);

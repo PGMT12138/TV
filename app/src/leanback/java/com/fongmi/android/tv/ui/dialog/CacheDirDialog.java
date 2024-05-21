@@ -34,7 +34,7 @@ public class CacheDirDialog implements CacheDirAdapter.OnClickListener {
         mItems = new ArrayList<>();
         mItems.add(activity.getCacheDir().getAbsolutePath());
         for(File dir : activity.getExternalCacheDirs()) mItems.add(dir.getAbsolutePath());
-        String cacheDir = Setting.getCacheDir();
+        String cacheDir = Setting.getThunderCacheDir();
         position = 0;
         for(int i=0; i<mItems.size(); i++) {
             if (mItems.get(i).equals(cacheDir)) position = i;

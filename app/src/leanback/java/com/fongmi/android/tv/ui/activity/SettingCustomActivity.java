@@ -67,7 +67,7 @@ public class SettingCustomActivity extends BaseActivity implements CacheDirCallb
         mBinding.aggregatedSearchText.setText(getSwitch(Setting.isAggregatedSearch()));
         mBinding.homeUIText.setText((homeUI = ResUtil.getStringArray(R.array.select_home_ui))[Setting.getHomeUI()]);
         mBinding.homeHistoryText.setText(getSwitch(Setting.isHomeHistory()));
-        mBinding.cacheDirText.setText(Setting.getCacheDir());
+        mBinding.cacheDirText.setText(Setting.getThunderCacheDir());
         mBinding.removeAdText.setText(getSwitch(Setting.isRemoveAd()));
         mBinding.languageText.setText((ResUtil.getStringArray(R.array.select_language))[Setting.getLanguage()]);
         mBinding.parseWebviewText.setText((parseWebview = ResUtil.getStringArray(R.array.select_parse_webview))[Setting.getParseWebView()]);
@@ -238,7 +238,7 @@ public class SettingCustomActivity extends BaseActivity implements CacheDirCallb
 
     @Override
     public void setCacheDir(String dir) {
-        Setting.putCacheDir(dir);
+        Setting.putThunderCacheDir(dir);
         mBinding.cacheDirText.setText(dir);
     }
 
