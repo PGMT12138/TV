@@ -12,6 +12,7 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.databinding.ActivitySettingCustomBinding;
 import com.fongmi.android.tv.event.RefreshEvent;
+import com.fongmi.android.tv.impl.CacheDirCallback;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.ButtonsDialog;
 import com.fongmi.android.tv.ui.dialog.CacheDirDialog;
@@ -26,7 +27,7 @@ import com.permissionx.guolindev.PermissionX;
 import com.tencent.smtt.sdk.QbSdk;
 import java.util.Locale;
 
-public class SettingCustomActivity extends BaseActivity {
+public class SettingCustomActivity extends BaseActivity implements CacheDirCallback {
 
     private ActivitySettingCustomBinding mBinding;
     private String[] quality;
@@ -203,10 +204,6 @@ public class SettingCustomActivity extends BaseActivity {
         });
     }
 
-    public void setCacheDirText() {
-        mBinding.cacheDirText.setText(Setting.getCacheDir());
-    }
-
     private void setLanguage(View view) {
         LanguageDialog.create(this).show();
     }
@@ -237,6 +234,12 @@ public class SettingCustomActivity extends BaseActivity {
         new Thread(() -> {
             Shell.exec("pm clear " + App.get().getPackageName());
         }).start();
+    }
+
+    @Override
+    public void setCacheDir(String dir) {
+        Setting.putCacheDir(dir);
+        mBinding.cacheDirText.setText(dir);
     }
 
 }

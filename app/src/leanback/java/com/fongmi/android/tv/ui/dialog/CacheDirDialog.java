@@ -9,7 +9,7 @@ import androidx.recyclerview.widget.GridLayoutManager;
 
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.databinding.DialogCacheDirBinding;
-import com.fongmi.android.tv.ui.activity.SettingCustomActivity;
+import com.fongmi.android.tv.impl.CacheDirCallback;
 import com.fongmi.android.tv.ui.adapter.CacheDirAdapter;
 import com.fongmi.android.tv.ui.custom.SpaceItemDecoration;
 import com.fongmi.android.tv.utils.ResUtil;
@@ -23,7 +23,7 @@ public class CacheDirDialog implements CacheDirAdapter.OnClickListener {
     private final DialogCacheDirBinding binding;
     private final CacheDirAdapter adapter;
     private final AlertDialog dialog;
-    private final Activity activity;
+    private final CacheDirCallback callback;
     private List<String> mItems;
     private int position;
     public static CacheDirDialog create(Activity activity) {
@@ -40,7 +40,7 @@ public class CacheDirDialog implements CacheDirAdapter.OnClickListener {
             if (mItems.get(i).equals(cacheDir)) position = i;
         }
         this.adapter = new CacheDirAdapter(this, mItems);
-        this.activity = activity;
+        this.callback = (CacheDirCallback) activity;
         this.binding = DialogCacheDirBinding.inflate(LayoutInflater.from(activity));
         this.dialog = new MaterialAlertDialogBuilder(activity).setView(binding.getRoot()).create();
     }
@@ -82,9 +82,8 @@ public class CacheDirDialog implements CacheDirAdapter.OnClickListener {
 
     @Override
     public void onItemClick(String path) {
-        if (dialog != null) dialog.dismiss();
-        Setting.putCacheDir(path);
-        ((SettingCustomActivity) activity).setCacheDirText();
+        callback.setCacheDir(path);
+        dialog.dismiss();
     }
 
 }
