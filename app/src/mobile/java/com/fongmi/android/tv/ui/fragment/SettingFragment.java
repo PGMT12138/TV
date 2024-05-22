@@ -354,7 +354,11 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
     }
 
     private void onTransmit(View view) {
-        TransmitActionDialog.create(this).show();
+        PermissionX.init(this).permissions(Manifest.permission.WRITE_EXTERNAL_STORAGE).request((allGranted, grantedList, deniedList) -> {
+            if (allGranted) {
+                TransmitActionDialog.create(this).show();
+            }
+        });
     }
 
     private void initConfig() {
