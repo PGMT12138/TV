@@ -11,7 +11,6 @@ import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.Constant;
-import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.bean.Device;
 import com.fongmi.android.tv.cast.ScanEvent;
 import com.fongmi.android.tv.cast.ScanTask;
@@ -113,8 +112,8 @@ public class TransmitDialog extends BaseDialog implements DeviceAdapter.OnClickL
         Notify.dismiss();
     }
 
-    private void onError() {
-        Notify.show(R.string.device_offline);
+    private void onError(Exception e) {
+        Notify.show(e.getMessage());
         Notify.dismiss();
     }
 
@@ -150,7 +149,7 @@ public class TransmitDialog extends BaseDialog implements DeviceAdapter.OnClickL
 
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                App.post(() -> onError());
+                App.post(() -> onError(e));
             }
         };
     }
