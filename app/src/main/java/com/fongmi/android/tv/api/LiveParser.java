@@ -69,6 +69,7 @@ public class LiveParser {
         Setting setting = Setting.create();
         Catchup catchup = Catchup.create();
         Channel channel = Channel.create("");
+        text = text.replace("\r\n", "\n");
         for (String line : text.split("\n")) {
             if (Thread.interrupted()) break;
             if (setting.find(line)) {
@@ -92,6 +93,7 @@ public class LiveParser {
 
     private static void txt(Live live, String text) {
         Setting setting = Setting.create();
+        text = text.replace("\r\n", "\n");
         for (String line : text.split("\n")) {
             if (Thread.interrupted()) break;
             String[] split = line.split(",");
@@ -102,7 +104,7 @@ public class LiveParser {
             if (split.length > 1 && split[1].contains("://")) {
                 Group group = live.getGroups().get(live.getGroups().size() - 1);
                 Channel channel = group.find(Channel.create(split[0]));
-                channel.addUrls(split[1].split("#"));
+                channel.addUrls(line.substring(line.indexOf(",") + 1).split("#"));
                 setting.copy(channel);
             }
         }
