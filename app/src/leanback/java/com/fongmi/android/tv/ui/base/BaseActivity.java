@@ -38,7 +38,6 @@ public abstract class BaseActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        LanguageUtil.setLanguage(this.getResources(),Setting.getLanguage());
         setContentView(getBinding().getRoot());
         EventBus.getDefault().register(this);
         Util.hideSystemUI(this);
@@ -107,6 +106,7 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     private Resources hackResources(Resources resources) {
         try {
+            LanguageUtil.setLanguage(resources, Setting.getLanguage());
             AutoSizeCompat.autoConvertDensityOfGlobal(resources);
             return resources;
         } catch (Exception ignored) {
