@@ -58,7 +58,6 @@ public class LiveParser {
     }
 
     private static void json(Live live, String text) {
-        text = text.replace("\r\n", "\n");
         live.getGroups().addAll(Group.arrayFrom(text));
         for (Group group : live.getGroups()) {
             for (Channel channel : group.getChannel()) {
@@ -113,7 +112,6 @@ public class LiveParser {
 
     private static void proxy(Live live, String text) {
         int number = 0;
-        text = text.replace("\r\n", "\n");
         for (Live item : Live.arrayFrom(text)) {
             Group group = live.find(Group.create(item.getGroup(), live.isPass()));
             for (Channel channel : item.getChannels()) {
