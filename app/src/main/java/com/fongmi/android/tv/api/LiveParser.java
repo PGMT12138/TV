@@ -46,6 +46,7 @@ public class LiveParser {
     public static void text(Live live, String text) {
         int number = 0;
         if (live.getGroups().size() > 0) return;
+        text = text.replace("\r\n", "\n");
         if (text.contains("#EXTM3U")) m3u(live, text);
         else txt(live, text);
         for (Group group : live.getGroups()) {
@@ -57,6 +58,7 @@ public class LiveParser {
     }
 
     private static void json(Live live, String text) {
+        text = text.replace("\r\n", "\n");
         live.getGroups().addAll(Group.arrayFrom(text));
         for (Group group : live.getGroups()) {
             for (Channel channel : group.getChannel()) {
@@ -111,6 +113,7 @@ public class LiveParser {
 
     private static void proxy(Live live, String text) {
         int number = 0;
+        text = text.replace("\r\n", "\n");
         for (Live item : Live.arrayFrom(text)) {
             Group group = live.find(Group.create(item.getGroup(), live.isPass()));
             for (Channel channel : item.getChannels()) {
@@ -122,7 +125,7 @@ public class LiveParser {
     }
 
     private static String getText(Live live) {
-        return getText(live.getUrl(), live.getHeaders()).replace("\r\n", "\n");
+        return getText(live.getUrl(), live.getHeaders());
     }
 
     private static String getText(String url, Map<String, String> header) {
