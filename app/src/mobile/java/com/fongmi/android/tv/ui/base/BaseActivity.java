@@ -2,7 +2,6 @@ package com.fongmi.android.tv.ui.base;
 
 import android.app.Activity;
 import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
@@ -26,10 +25,8 @@ import com.bumptech.glide.request.transition.Transition;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.api.config.WallConfig;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 
 import org.greenrobot.eventbus.EventBus;
@@ -137,20 +134,6 @@ public abstract class BaseActivity extends AppCompatActivity {
         } catch (Exception e) {
             getWindow().setBackgroundDrawableResource(R.drawable.wallpaper_1);
         }
-    }
-
-    private Resources hackResources(Resources resources) {
-        try {
-            LanguageUtil.setLanguage(resources, Setting.getLanguage());
-            return resources;
-        } catch (Exception ignored) {
-            return resources;
-        }
-    }
-
-    @Override
-    public Resources getResources() {
-        return hackResources(super.getResources());
     }
 
     private void loadWall(File file) {

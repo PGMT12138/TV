@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.content.res.Resources;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -107,6 +106,7 @@ public class App extends Application {
     public void onCreate() {
         super.onCreate();
         Notify.createChannel();
+        LanguageUtil.init(this);
         Logger.addLogAdapter(getLogAdapter());
         OkHttp.get().setProxy(Setting.getProxy());
         OkHttp.get().setDoh(Doh.objectFrom(Setting.getDoh()));
@@ -147,13 +147,6 @@ public class App extends Application {
             }
         });
 
-    }
-
-    @Override
-    public Resources getResources() {
-        Resources resources = super.getResources();
-        LanguageUtil.setLanguage(resources, Setting.getLanguage());
-        return resources;
     }
 
     @Override

@@ -25,7 +25,6 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Util;
 
@@ -135,7 +134,6 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     private Resources hackResources(Resources resources) {
         try {
-            LanguageUtil.setLanguage(resources, Setting.getLanguage());
             AutoSizeCompat.autoConvertDensityOfGlobal(resources);
             return resources;
         } catch (Exception ignored) {
