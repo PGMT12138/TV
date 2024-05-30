@@ -9,14 +9,20 @@ import android.view.View;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.leanback.widget.ArrayObjectAdapter;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewbinding.ViewBinding;
 
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
+import com.bumptech.glide.request.RequestOptions;
+import com.bumptech.glide.request.target.CustomTarget;
+import com.bumptech.glide.request.transition.Transition;
+import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.api.config.WallConfig;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.LanguageUtil;
@@ -42,9 +48,14 @@ public abstract class BaseActivity extends AppCompatActivity {
         EventBus.getDefault().register(this);
         Util.hideSystemUI(this);
         setBackCallback();
-        setWall();
         initView();
         initEvent();
+    }
+
+    @Override
+    public void setContentView(View view) {
+        super.setContentView(view);
+        refreshWall();
     }
 
     protected Activity getActivity() {
@@ -93,15 +104,33 @@ public abstract class BaseActivity extends AppCompatActivity {
         });
     }
 
-    private void setWall() {
+    private void refreshWall() {
         try {
             if (!customWall()) return;
             File file = FileUtil.getWall(Setting.getWall());
-            if (file.exists() && file.length() > 0) getWindow().setBackgroundDrawable(WallConfig.drawable(Drawable.createFromPath(file.getAbsolutePath())));
+            if (file.exists() && file.length() > 0) loadWall(file);
             else getWindow().setBackgroundDrawableResource(ResUtil.getDrawable(file.getName()));
         } catch (Exception e) {
             getWindow().setBackgroundDrawableResource(R.drawable.wallpaper_1);
         }
+    }
+
+    private void loadWall(File file) {
+        Glide.with(App.get()).load(file).centerCrop().skipMemoryCache(true).diskCacheStrategy(DiskCacheStrategy.NONE).apply(new RequestOptions().override(ResUtil.getScreenWidth(), ResUtil.getScreenHeight())).into(new CustomTarget<Drawable>() {
+            @Override
+            public void onResourceReady(@NonNull Drawable drawable, @Nullable Transition<? super Drawable> transition) {
+                getWindow().setBackgroundDrawable(drawable);
+            }
+
+            @Override
+            public void onLoadFailed(@Nullable Drawable error) {
+                getWindow().setBackgroundDrawableResource(R.drawable.wallpaper_1);
+            }
+
+            @Override
+            public void onLoadCleared(@Nullable Drawable drawable) {
+            }
+        });
     }
 
     private Resources hackResources(Resources resources) {
@@ -116,9 +145,7 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onRefreshEvent(RefreshEvent event) {
-        if (event.getType() != RefreshEvent.Type.WALL) return;
-        WallConfig.get().setDrawable(null);
-        setWall();
+        if (event.getType() == RefreshEvent.Type.WALL) refreshWall();
     }
 
     @Override
