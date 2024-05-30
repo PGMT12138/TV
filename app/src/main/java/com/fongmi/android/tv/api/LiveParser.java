@@ -26,8 +26,9 @@ public class LiveParser {
 
     private static final Pattern CATCHUP_SOURCE = Pattern.compile(".*catchup-source=\"(.?|.+?)\".*");
     private static final Pattern CATCHUP = Pattern.compile(".*catchup=\"(.?|.+?)\".*");
+    private static final Pattern TVG_NAME = Pattern.compile(".*tvg-name=\"(.?|.+?)\".*");
+    private static final Pattern TVG_LOGO = Pattern.compile(".*tvg-logo=\"(.?|.+?)\".*");
     private static final Pattern GROUP = Pattern.compile(".*group-title=\"(.?|.+?)\".*");
-    private static final Pattern LOGO = Pattern.compile(".*tvg-logo=\"(.?|.+?)\".*");
     private static final Pattern NAME = Pattern.compile(".*,(.+?)$");
 
     private static String extract(String line, Pattern pattern) {
@@ -80,8 +81,12 @@ public class LiveParser {
             } else if (line.startsWith("#EXTINF:")) {
                 Group group = live.find(Group.create(extract(line, GROUP), live.isPass()));
                 channel = group.find(Channel.create(extract(line, NAME)));
-                channel.setLogo(extract(line, LOGO));
-                channel.setCatchup(catchup);
+                channel.setTvgName(extract(line, TVG_NAME));
+                channel.setLogo(extract(line, TVG_LOGO));
+                Catchup unknown = Catchup.create();
+                unknown.setType(extract(line, CATCHUP));
+                unknown.setSource(extract(line, CATCHUP_SOURCE));
+                channel.setCatchup(Catchup.decide(unknown, catchup));
             } else if (!line.startsWith("#") && line.contains("://")) {
                 String[] split = line.split("\\|");
                 if (split.length > 1) setting.headers(Arrays.copyOfRange(split, 1, split.length));
