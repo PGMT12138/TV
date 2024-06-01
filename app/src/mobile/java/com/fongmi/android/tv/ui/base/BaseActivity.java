@@ -2,7 +2,6 @@ package com.fongmi.android.tv.ui.base;
 
 import android.app.Activity;
 import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
@@ -19,17 +18,15 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.viewbinding.ViewBinding;
 
 import com.bumptech.glide.Glide;
-import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.request.target.CustomTarget;
 import com.bumptech.glide.request.transition.Transition;
+import com.bumptech.glide.signature.ObjectKey;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.api.config.WallConfig;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 
 import org.greenrobot.eventbus.EventBus;
@@ -139,22 +136,8 @@ public abstract class BaseActivity extends AppCompatActivity {
         }
     }
 
-    private Resources hackResources(Resources resources) {
-        try {
-            LanguageUtil.setLanguage(resources, Setting.getLanguage());
-            return resources;
-        } catch (Exception ignored) {
-            return resources;
-        }
-    }
-
-    @Override
-    public Resources getResources() {
-        return hackResources(super.getResources());
-    }
-
     private void loadWall(File file) {
-        Glide.with(App.get()).load(file).centerCrop().skipMemoryCache(true).diskCacheStrategy(DiskCacheStrategy.NONE).apply(new RequestOptions().override(ResUtil.getScreenWidth(), ResUtil.getScreenHeight())).into(new CustomTarget<Drawable>() {
+        Glide.with(App.get()).load(file).centerCrop().signature(new ObjectKey(file.lastModified())).apply(new RequestOptions().override(ResUtil.getScreenWidth(), ResUtil.getScreenHeight())).into(new CustomTarget<Drawable>() {
             @Override
             public void onResourceReady(@NonNull Drawable drawable, @Nullable Transition<? super Drawable> transition) {
                 getWindow().setBackgroundDrawable(drawable);

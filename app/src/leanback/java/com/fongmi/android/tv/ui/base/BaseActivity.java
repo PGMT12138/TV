@@ -16,16 +16,14 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewbinding.ViewBinding;
 
 import com.bumptech.glide.Glide;
-import com.bumptech.glide.load.engine.DiskCacheStrategy;
-import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.request.target.CustomTarget;
 import com.bumptech.glide.request.transition.Transition;
+import com.bumptech.glide.signature.ObjectKey;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LanguageUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Util;
 
@@ -116,7 +114,7 @@ public abstract class BaseActivity extends AppCompatActivity {
     }
 
     private void loadWall(File file) {
-        Glide.with(App.get()).load(file).centerCrop().skipMemoryCache(true).diskCacheStrategy(DiskCacheStrategy.NONE).apply(new RequestOptions().override(ResUtil.getScreenWidth(), ResUtil.getScreenHeight())).into(new CustomTarget<Drawable>() {
+        Glide.with(App.get()).load(file).centerCrop().override(ResUtil.getScreenWidth(), ResUtil.getScreenHeight()).signature(new ObjectKey(com.github.catvod.utils.Util.md5(file))).into(new CustomTarget<Drawable>() {
             @Override
             public void onResourceReady(@NonNull Drawable drawable, @Nullable Transition<? super Drawable> transition) {
                 getWindow().setBackgroundDrawable(drawable);
@@ -135,7 +133,6 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     private Resources hackResources(Resources resources) {
         try {
-            LanguageUtil.setLanguage(resources, Setting.getLanguage());
             AutoSizeCompat.autoConvertDensityOfGlobal(resources);
             return resources;
         } catch (Exception ignored) {
