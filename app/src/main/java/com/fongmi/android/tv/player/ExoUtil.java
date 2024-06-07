@@ -159,6 +159,7 @@ public class ExoUtil {
         if (drm != null) builder.setDrmConfiguration(drm.get());
         builder.setAllowChunklessPreparation(Players.isHard(Players.EXO));
         if (mimeType != null) builder.setMimeType(mimeType);
+        builder.setForceUseRtpTcp(Setting.getRtsp() == 1);
         return builder.build();
     }
 
