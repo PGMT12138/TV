@@ -105,7 +105,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
     }
 
     private PlayerView getExo() {
-        return Setting.getRender() == 0 ? mBinding.surface : mBinding.texture;
+        return mBinding.exo;
     }
 
     private IjkVideoView getIjk() {
