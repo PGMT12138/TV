@@ -287,6 +287,10 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         return TextUtils.isEmpty(getUrl());
     }
 
+    public boolean isLive() {
+        return getDuration() < 5 * 60 * 1000;
+    }
+
     public boolean isVod() {
         return getDuration() > 5 * 60 * 1000;
     }
