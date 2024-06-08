@@ -858,7 +858,8 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, Custom
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onErrorEvent(ErrorEvent event) {
-        if (mPlayers.addRetry() > event.getRetry()) checkError(event);
+        if (event.getCode() / 1000 == 4 && mPlayers.isExo() && Players.isHard(Players.EXO)) onDecode();
+        else if (mPlayers.addRetry() > event.getRetry()) checkError(event);
         else fetch();
     }
 
