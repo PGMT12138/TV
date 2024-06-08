@@ -636,8 +636,8 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
 
     @Override
     public void onPlayerError(@NonNull PlaybackException error) {
-        ErrorEvent.url(ExoUtil.getRetry(this.error = error.errorCode));
         setPlaybackState(PlaybackStateCompat.STATE_ERROR);
+        ErrorEvent.url(ExoUtil.getRetry(this.error = error.errorCode), error.errorCode);
     }
 
     @Override
