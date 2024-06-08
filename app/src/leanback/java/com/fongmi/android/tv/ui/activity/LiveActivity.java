@@ -590,9 +590,13 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
 
     @Override
     public void onItemClick(Channel item) {
-        mGroup.setPosition(mBinding.channel.getSelectedPosition());
-        setChannel(item.group(mGroup));
-        hideUI();
+        if (item.getData().getList().size() > 0 && item.isSelected() && mChannel != null) {
+            showEpg(item);
+        } else {
+            mGroup.setPosition(mBinding.channel.getSelectedPosition());
+            setChannel(item.group(mGroup));
+            hideUI();
+        }
     }
 
     @Override
@@ -664,7 +668,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
     }
 
     private void setEpg(Epg epg) {
-        if (mChannel != null && mChannel.getName().equals(epg.getKey())) setEpg();
+        if (mChannel != null && mChannel.getTvgName().equals(epg.getKey())) setEpg();
     }
 
     private void fetch() {
@@ -778,7 +782,11 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
         MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
         builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
         builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-        builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getIjk().getDefaultArtwork());
+        try {
+            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getIjk().getDefaultArtwork());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, mPlayers.getDuration());
         mPlayers.setMetadata(builder.build());
     }
