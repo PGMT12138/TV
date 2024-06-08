@@ -493,8 +493,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, Custom
         hideEpg();
     }
 
-    @Override
-    public void showEpg(Channel item) {
+    private void showEpg(Channel item) {
         if (mChannel == null || mChannel.getData().getList().isEmpty() || mEpgDataAdapter.getItemCount() == 0 || !mChannel.equals(item)) return;
         mBinding.widget.epgData.scrollToPosition(item.getData().getSelected());
         mBinding.widget.epg.setVisibility(View.VISIBLE);
@@ -638,14 +637,18 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, Custom
 
     @Override
     public void onItemClick(Channel item) {
-        mGroup.setPosition(mChannelAdapter.setSelected(item.group(mGroup)));
-        mPlayers.setPlayer(getPlayerType(item.getPlayerType()));
-        setArtwork(item.getLogo());
-        mChannel = item;
-        setPlayerView();
-        showInfo();
-        hideUI();
-        fetch();
+        if (item.getData().getList().size() > 0 && item.isSelected() && mChannel != null) {
+            showEpg(item);
+        } else {
+            mGroup.setPosition(mChannelAdapter.setSelected(item.group(mGroup)));
+            mPlayers.setPlayer(getPlayerType(item.getPlayerType()));
+            setArtwork(item.getLogo());
+            mChannel = item;
+            setPlayerView();
+            showInfo();
+            hideUI();
+            fetch();
+        }
     }
 
     @Override
@@ -711,7 +714,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, Custom
     }
 
     private void setEpg(Epg epg) {
-        if (mChannel != null && mChannel.getName().equals(epg.getKey())) setEpg();
+        if (mChannel != null && mChannel.getTvgName().equals(epg.getKey())) setEpg();
     }
 
     private void fetch() {

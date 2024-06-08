@@ -590,9 +590,13 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
 
     @Override
     public void onItemClick(Channel item) {
-        mGroup.setPosition(mBinding.channel.getSelectedPosition());
-        setChannel(item.group(mGroup));
-        hideUI();
+        if (item.getData().getList().size() > 0 && item.isSelected() && mChannel != null) {
+            showEpg(item);
+        } else {
+            mGroup.setPosition(mBinding.channel.getSelectedPosition());
+            setChannel(item.group(mGroup));
+            hideUI();
+        }
     }
 
     @Override
@@ -664,7 +668,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
     }
 
     private void setEpg(Epg epg) {
-        if (mChannel != null && mChannel.getName().equals(epg.getKey())) setEpg();
+        if (mChannel != null && mChannel.getTvgName().equals(epg.getKey())) setEpg();
     }
 
     private void fetch() {
