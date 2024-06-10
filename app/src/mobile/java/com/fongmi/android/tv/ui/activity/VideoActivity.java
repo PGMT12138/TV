@@ -420,11 +420,11 @@ public class VideoActivity extends BaseActivity implements Clock.Callback, Custo
     }
 
     public void setDanmuViewSettings() {
-        int maxLine = Setting.getDanmuLine(2);
         float[] range = {2.4f, 1.8f, 1.2f, 0.8f};
         float speed = range[Setting.getDanmuSpeed()];
         float alpha = Setting.getDanmuAlpha() / 100.0f;
         float sizeScale = Setting.getDanmuSize();
+        int maxLine = Setting.getDanmuLine(2);
         HashMap<Integer, Integer> maxLines = new HashMap<>();
         maxLines.put(BaseDanmaku.TYPE_FIX_TOP, maxLine);
         maxLines.put(BaseDanmaku.TYPE_SCROLL_RL, maxLine);
