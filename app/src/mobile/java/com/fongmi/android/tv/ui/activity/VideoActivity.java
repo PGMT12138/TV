@@ -12,7 +12,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.support.v4.media.MediaMetadataCompat;
 import android.text.Html;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -911,15 +910,7 @@ public class VideoActivity extends BaseActivity implements Clock.Callback, Custo
 
     private boolean onChoose() {
         if (mPlayers.isEmpty()) return false;
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.putExtra("return_result", true);
-        intent.putExtra("headers", mPlayers.getHeaderArray());
-        intent.putExtra("position", (int) mPlayers.getPosition());
-        intent.putExtra("title", mBinding.control.title.getText());
-        intent.setDataAndType(mPlayers.getUri(), "video/*");
-        startActivityForResult(Util.getChooser(intent), 1001);
+        mPlayers.choose(this, mBinding.control.title.getText());
         setRedirect(true);
         return true;
     }
@@ -1319,17 +1310,7 @@ public class VideoActivity extends BaseActivity implements Clock.Callback, Custo
         String title = mHistory == null ? getName() : mHistory.getVodName();
         String artist = mEpisodeAdapter.isEmpty() ? "" : getEpisode().getName();
         artist = title.equals(artist) ? "" : getString(R.string.play_now, artist);
-        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
-        builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
-        builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-        try {
-            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getIjk().getDefaultArtwork());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, mPlayers.getDuration());
-        mPlayers.setMetadata(builder.build());
-        ActionEvent.update();
+        mPlayers.setMetadata(title, artist, mBinding.exo);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
@@ -1682,15 +1663,9 @@ public class VideoActivity extends BaseActivity implements Clock.Callback, Custo
     }
 
     @Override
-    public void onShare(CharSequence title, String url) {
-        if (IDMUtil.downloadFile(this, url, title.toString(), mPlayers.getHeaders(), false, false)) return;
-        Intent intent = new Intent(Intent.ACTION_SEND);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.putExtra(Intent.EXTRA_TEXT, url);
-        intent.putExtra("name", title);
-        intent.putExtra("title", title);
-        intent.setType("text/plain");
-        startActivity(Util.getChooser(intent));
+    public void onShare(CharSequence title) {
+        if (IDMUtil.downloadFile(this, mPlayers.getUrl(), title.toString(), mPlayers.getHeaders(), false, false)) return;
+        mPlayers.share(this, title);
         setRedirect(true);
     }
 

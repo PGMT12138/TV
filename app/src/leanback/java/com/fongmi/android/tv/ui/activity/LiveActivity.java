@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
-import android.support.v4.media.MediaMetadataCompat;
 import android.view.KeyEvent;
 import android.view.View;
 
@@ -407,13 +406,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
 
     private boolean onChoose() {
         if (mPlayers.isEmpty()) return false;
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.putExtra("headers", mPlayers.getHeaderArray());
-        intent.putExtra("title", mBinding.widget.name.getText());
-        intent.setDataAndType(mPlayers.getUri(), "video/*");
-        startActivity(Util.getChooser(intent));
+        mPlayers.choose(this, mBinding.widget.title.getText());
         return true;
     }
 
@@ -779,16 +772,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
     private void setMetadata() {
         String title = mBinding.widget.name.getText().toString();
         String artist = mBinding.widget.play.getText().toString();
-        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
-        builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
-        builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-        try {
-            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getIjk().getDefaultArtwork());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, mPlayers.getDuration());
-        mPlayers.setMetadata(builder.build());
+        mPlayers.setMetadata(title, artist, mBinding.exo);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)

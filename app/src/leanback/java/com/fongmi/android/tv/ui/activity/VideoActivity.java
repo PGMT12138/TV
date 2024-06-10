@@ -6,7 +6,6 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.support.v4.media.MediaMetadataCompat;
 import android.text.Html;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -1020,15 +1019,7 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
 
     private boolean onChoose() {
         if (mPlayers.isEmpty()) return false;
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.putExtra("return_result", true);
-        intent.putExtra("headers", mPlayers.getHeaderArray());
-        intent.putExtra("position", (int) mPlayers.getPosition());
-        intent.putExtra("title", mBinding.widget.title.getText());
-        intent.setDataAndType(mPlayers.getUri(), "video/*");
-        startActivityForResult(Util.getChooser(intent), 1001);
+        mPlayers.choose(this, mBinding.widget.title.getText());
         return true;
     }
 
@@ -1374,16 +1365,7 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
         String title = mHistory == null ? getName() : mHistory.getVodName();
         String artist = mEpisodeAdapter.size() == 0 ? "" : getEpisode().getName();
         artist = title.equals(artist) ? "" : getString(R.string.play_now, artist);
-        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
-        builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
-        builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-        try {
-            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getIjk().getDefaultArtwork());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, mPlayers.getDuration());
-        mPlayers.setMetadata(builder.build());
+        mPlayers.setMetadata(title, artist, mBinding.exo);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
