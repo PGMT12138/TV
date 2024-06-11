@@ -489,7 +489,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
 
     private void hideControl() {
         mBinding.control.getRoot().setVisibility(View.GONE);
-        mBinding.widget.top.setVisibility(View.GONE);
+        mBinding.widget.top.setVisibility(Setting.isDisplayVideoInformation() ? View.VISIBLE : View.GONE);   
         App.removeCallbacks(mR1);
     }
 
@@ -499,6 +499,7 @@ public class LiveActivity extends BaseActivity implements Clock.Callback, GroupP
         mBinding.display.clock.setVisibility(Setting.isDisplayTime() && visible  ? View.VISIBLE : View.GONE);
         mBinding.display.netspeed.setVisibility(Setting.isDisplaySpeed() && visible ? View.VISIBLE : View.GONE);
         mBinding.display.duration.setVisibility(View.GONE);
+        mBinding.widget.top.setVisibility(Setting.isDisplayVideoInformation() && visible ? View.VISIBLE : View.GONE);       
     }
 
     private void onTimeChangeDisplaySpeed() {

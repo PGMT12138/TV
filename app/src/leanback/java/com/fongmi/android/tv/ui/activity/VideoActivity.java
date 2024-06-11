@@ -794,6 +794,7 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
         mBinding.display.netspeed.setVisibility(Setting.isDisplaySpeed() && !isVisible(mBinding.control.getRoot()) ? View.VISIBLE : View.GONE);
         mBinding.display.duration.setVisibility(Setting.isDisplayDuration() && !isVisible(mBinding.control.getRoot()) ? View.VISIBLE : View.GONE);
         mBinding.display.progress.setVisibility(Setting.isDisplayMiniProgress() && !isVisible(mBinding.control.getRoot()) && (mPlayers.getDuration() > 60000) ? View.VISIBLE : View.GONE);
+        mBinding.widget.info.setVisibility(Setting.isDisplayVideoInformation() || isVisible(mBinding.widget.info)  ? View.VISIBLE : View.GONE);
     }
 
     private void onTimeChangeDisplaySpeed() {
@@ -1113,7 +1114,7 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
     }
 
     private void hideInfo() {
-        mBinding.widget.info.setVisibility(View.GONE);
+        mBinding.widget.info.setVisibility(Setting.isDisplayVideoInformation() ? View.VISIBLE : View.GONE);
         showDisplayInfo();
     }
 
@@ -1556,7 +1557,8 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
         mBinding.widget.exoDuration.setText(mPlayers.getDurationTime());
         mBinding.widget.exoPosition.setText(mPlayers.getPositionTime(0));
         if (visible) showInfoAndCenter();
-        else hideInfoAndCenter();
+        else if (Setting.isDisplayVideoInformation() == false)
+            hideInfoAndCenter();
         mPlayers.pause();
     }
 
