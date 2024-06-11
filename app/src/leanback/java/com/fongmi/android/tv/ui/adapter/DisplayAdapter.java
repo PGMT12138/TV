@@ -26,7 +26,7 @@ public class DisplayAdapter extends RecyclerView.Adapter<DisplayAdapter.ViewHold
         mItems.add(ResUtil.getString(R.string.play_netspeed));
         mItems.add(ResUtil.getString(R.string.play_duration));
         mItems.add(ResUtil.getString(R.string.play_mini_progress));
-        mItems.add(ResUtil.getString(R.string.play_video_information));
+        mItems.add(ResUtil.getString(R.string.play_video_title));
     }
 
     @Override
@@ -55,7 +55,7 @@ public class DisplayAdapter extends RecyclerView.Adapter<DisplayAdapter.ViewHold
         else if (position == 1) return Setting.isDisplaySpeed();
         else if (position == 2) return Setting.isDisplayDuration();
         else if (position == 3) return Setting.isDisplayMiniProgress();
-        else if (position == 4) return Setting.isDisplayVideoInformation();
+        else if (position == 4) return Setting.isDisplayVideoTitle();
         return false;
     }
 
@@ -64,7 +64,7 @@ public class DisplayAdapter extends RecyclerView.Adapter<DisplayAdapter.ViewHold
         else if (position == 1) Setting.putDisplaySpeed(!Setting.isDisplaySpeed());
         else if (position == 2) Setting.putDisplayDuration(!Setting.isDisplayDuration());
         else if (position == 3) Setting.putDisplayMiniProgress(!Setting.isDisplayMiniProgress());
-        else if (position == 4) Setting.putDisplayVideoInformation(!Setting.isDisplayVideoInformation());
+        else if (position == 4) Setting.putDisplayVideoTitle(!Setting.isDisplayVideoTitle());
         notifyItemRangeChanged(0, getItemCount());
     }
 
@@ -74,12 +74,12 @@ public class DisplayAdapter extends RecyclerView.Adapter<DisplayAdapter.ViewHold
         else if (position == 1) checked = Setting.isDisplaySpeed();
         else if (position == 2) checked = Setting.isDisplayDuration();
         else if (position == 3) checked = Setting.isDisplayMiniProgress();
-        else if (position == 4) checked = Setting.isDisplayVideoInformation();
+        else if (position == 4) checked = Setting.isDisplayVideoTitle();
         Setting.putDisplayTime(!checked);
         Setting.putDisplaySpeed(!checked);
         Setting.putDisplayDuration(!checked);
         Setting.putDisplayMiniProgress(!checked);
-        Setting.putDisplayVideoInformation(!checked);
+        Setting.putDisplayVideoTitle(!checked);
         notifyItemRangeChanged(0, getItemCount());
         return true;
     }
