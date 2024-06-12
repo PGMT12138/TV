@@ -1132,10 +1132,10 @@ public class VideoActivity extends BaseActivity implements CustomKeyDownVod.List
         int count = mBinding.control.actionLayout.getChildCount();
         for(int i=0; i<count-1; i++) {
             View btn = mBinding.control.actionLayout.getChildAt(i);
-            if (btn == null || !isVisible(btn)) continue;
+            if (btn == null || !isVisible(btn) || !btn.isEnabled()) continue;
             for(int j=i+1; j<count; j++) {
                 View next = mBinding.control.actionLayout.getChildAt(j);
-                if (next == null || !isVisible(next)) continue;
+                if (next == null || !isVisible(next) || !btn.isEnabled()) continue;
                 btn.setNextFocusRightId(next.getId());
                 next.setNextFocusLeftId(btn.getId());
                 break;
