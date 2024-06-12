@@ -374,12 +374,12 @@ public class Setting {
         Prefers.put("display_mini_progress", display);
     }
 
-    public static boolean isDisplayVideoInformation() {
-        return Prefers.getBoolean("display_video_information", false);
+    public static boolean isDisplayVideoTitle() {
+        return Prefers.getBoolean("display_video_title", false);
     }
 
-    public static void putDisplayVideoInformation(boolean display) {
-        Prefers.put("display_video_information", display);
+    public static void putDisplayVideoTitle(boolean display) {
+        Prefers.put("display_video_title", display);
     }
 
     public static float getPlaySpeed() {

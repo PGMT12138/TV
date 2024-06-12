@@ -414,6 +414,8 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         if (isExo()) releaseExo();
         if (isIjk()) releaseIjk();
         if (haveDanmu()) danmuView.release();
+        removeTimeoutCheck();
+        App.execute(() -> Source.get().stop());
     }
 
     public void start(Channel channel, int timeout) {
@@ -507,7 +509,6 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setMediaSource(Result result, int timeout) {
-        Logger.t(TAG).d(error + "," + result.getRealUrl());
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(result), position);
         if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(result, sub, error), position);
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
@@ -515,7 +516,6 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setMediaSource(Channel channel, int timeout) {
-        Logger.t(TAG).d(error + "," + channel.getUrl());
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(channel));
         if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(channel, error));
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
@@ -523,7 +523,6 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setMediaSource(Map<String, String> headers, String url) {
-        Logger.t(TAG).d(error + "," + url);
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(headers, url), position);
         if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(headers, url, sub, error), position);
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
@@ -531,6 +530,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setTimeoutCheck(Map<String, String> headers, String url, int timeout) {
+        Logger.t(TAG).d(error + "," + url);
         App.post(runnable, timeout);
         this.headers = headers;
         PlayerEvent.state(0);
