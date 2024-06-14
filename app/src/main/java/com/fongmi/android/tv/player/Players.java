@@ -84,6 +84,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     private Sub sub;
 
     private long position;
+    private int decode;
     private int player;
     private int error;
     private int retry;
@@ -92,12 +93,12 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         return type == EXO;
     }
 
-    public static boolean isHard(int player) {
-        return Setting.getDecode(player) == HARD;
+    public boolean isHard() {
+        return decode == HARD;
     }
 
-    public static boolean isSoft(int player) {
-        return Setting.getDecode(player) == SOFT;
+    public boolean isSoft() {
+        return decode == SOFT;
     }
 
     public boolean isExo() {
@@ -110,6 +111,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
 
     public Players init(Activity activity) {
         player = Setting.getPlayer();
+        decode = Setting.getDecode(player);
         builder = new StringBuilder();
         runnable = ErrorEvent::timeout;
         formatter = new Formatter(builder, Locale.getDefault());
@@ -119,10 +121,8 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
 
     private void createSession(Activity activity) {
         session = new MediaSessionCompat(activity, "TV");
-        session.setMediaButtonReceiver(null);
         session.setCallback(SessionCallback.create(this));
-        session.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
-        session.setSessionActivity(PendingIntent.getActivity(App.get(), 99, new Intent(App.get(), activity.getClass()), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+        session.setSessionActivity(PendingIntent.getActivity(App.get(), 0, new Intent(App.get(), activity.getClass()), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
         MediaControllerCompat.setMediaController(activity, session.getController());
     }
 
@@ -134,7 +134,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setupExo(PlayerView view) {
-        exoPlayer = new ExoPlayer.Builder(App.get()).setLoadControl(ExoUtil.buildLoadControl()).setRenderersFactory(ExoUtil.buildRenderersFactory()).setTrackSelector(ExoUtil.buildTrackSelector()).build();
+        exoPlayer = new ExoPlayer.Builder(App.get()).setLoadControl(ExoUtil.buildLoadControl()).setRenderersFactory(ExoUtil.buildRenderersFactory(decode)).setTrackSelector(ExoUtil.buildTrackSelector()).build();
         exoPlayer.setAudioAttributes(AudioAttributes.DEFAULT, true);
         exoPlayer.addAnalyticsListener(new EventLogger());
         exoPlayer.setHandleAudioBecomingNoisy(true);
@@ -146,7 +146,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     private void setupIjk(IjkVideoView view) {
-        ijkPlayer = view.render(Setting.getRender()).decode(Setting.getDecode(IJK));
+        ijkPlayer = view.render(Setting.getRender()).decode(decode);
         ijkPlayer.addListener(this);
         ijkPlayer.setPlayer(player);
     }
@@ -198,6 +198,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     public void setPlayer(int player) {
         if (this.player != player) stop();
         this.player = player;
+        this.decode = getDecode(player);
     }
 
     public int getDecode(int player) {
@@ -314,7 +315,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
     }
 
     public String getDecodeText() {
-        return ResUtil.getStringArray(R.array.select_decode)[Setting.getDecode(player)];
+        return ResUtil.getStringArray(R.array.select_decode)[decode];
     }
 
     public String setSpeed(float speed) {
@@ -356,8 +357,9 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         setPlayer(isExo() ? IJK : EXO);
     }
 
-    public void toggleDecode() {
-        setDecode(player, getDecode(player) == HARD ? SOFT : HARD);
+    public void toggleDecode(boolean save) {
+        decode = isHard() ? SOFT : HARD;
+        if (save) setDecode(player, decode);
     }
 
     public String getPositionTime(long time) {
@@ -510,21 +512,21 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
 
     private void setMediaSource(Result result, int timeout) {
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(result), position);
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(result, sub, error), position);
+        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(result, sub, decode, error), position);
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
         setTimeoutCheck(result.getHeaders(), result.getRealUrl(), timeout);
     }
 
     private void setMediaSource(Channel channel, int timeout) {
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(channel));
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(channel, error));
+        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(channel, sub, decode, error));
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
         setTimeoutCheck(channel.getHeaders(), channel.getUrl(), timeout);
     }
 
     private void setMediaSource(Map<String, String> headers, String url) {
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(headers, url), position);
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(headers, url, sub, error), position);
+        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(headers, url, sub, decode, error), position);
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
         setTimeoutCheck(headers, url, Constant.TIMEOUT_PLAY);
     }
