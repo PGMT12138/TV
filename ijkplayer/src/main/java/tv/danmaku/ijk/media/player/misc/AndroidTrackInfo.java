@@ -104,6 +104,11 @@ public class AndroidTrackInfo implements ITrackInfo {
     @Override
     public float getFps() {
         if (mTrackInfo == null || mTrackInfo.getFormat() == null) return 0;
-        return mTrackInfo.getFormat().getFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER);
+        try {
+            return mTrackInfo.getFormat().getFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0;
+        }
     }
 }
