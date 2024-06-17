@@ -170,11 +170,6 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         return ijkPlayer;
     }
 
-    public VideoSize getVideoSize() {
-        if (isExo()) return exo().getVideoSize();
-        return new VideoSize(ijk().getVideoWidth(), ijk().getVideoHeight());
-    }
-
     public Map<String, String> getHeaders() {
         return headers == null ? new HashMap<>() : checkUa(headers);
     }
@@ -232,6 +227,14 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
 
     public String stringToTime(long time) {
         return Util.format(builder, formatter, time);
+    }
+
+    public int getVideoWidth() {
+        return isExo() ? exoPlayer.getVideoSize().width : ijkPlayer.getVideoWidth();
+    }
+
+    public int getVideoHeight() {
+        return isExo() ? exoPlayer.getVideoSize().height : ijkPlayer.getVideoHeight();
     }
 
     public float getSpeed() {
@@ -442,14 +445,6 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, Analytic
         } else {
             setMediaSource(result, timeout);
         }
-    }
-
-    private int getVideoWidth() {
-        return isExo() ? exoPlayer.getVideoSize().width : ijkPlayer.getVideoWidth();
-    }
-
-    private int getVideoHeight() {
-        return isExo() ? exoPlayer.getVideoSize().height : ijkPlayer.getVideoHeight();
     }
 
     private void playExo() {
