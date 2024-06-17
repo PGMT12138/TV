@@ -3,8 +3,6 @@ package com.fongmi.android.tv.player;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.Intent;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.media.MediaMetadataCompat;
@@ -18,7 +16,6 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.exoplayer.util.EventLogger;
 import androidx.media3.ui.PlayerView;
 
 import com.fongmi.android.tv.App;
@@ -26,6 +23,7 @@ import com.fongmi.android.tv.Constant;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.bean.Channel;
+import com.fongmi.android.tv.bean.Drm;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Sub;
 import com.fongmi.android.tv.bean.Track;
@@ -34,6 +32,7 @@ import com.fongmi.android.tv.event.ErrorEvent;
 import com.fongmi.android.tv.event.PlayerEvent;
 import com.fongmi.android.tv.impl.ParseCallback;
 import com.fongmi.android.tv.impl.SessionCallback;
+import com.fongmi.android.tv.player.exo.ExoUtil;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.ResUtil;
@@ -78,6 +77,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
     private ExoPlayer exoPlayer;
     private ParseJob parseJob;
     private Runnable runnable;
+    private String format;
     private String url;
     private Sub sub;
 
@@ -133,9 +133,8 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
     }
 
     private void setupExo(PlayerView view) {
-        exoPlayer = new ExoPlayer.Builder(App.get()).setLoadControl(ExoUtil.buildLoadControl()).setRenderersFactory(ExoUtil.buildRenderersFactory(decode)).setTrackSelector(ExoUtil.buildTrackSelector()).build();
+        exoPlayer = new ExoPlayer.Builder(App.get()).setLoadControl(ExoUtil.buildLoadControl()).setTrackSelector(ExoUtil.buildTrackSelector()).setRenderersFactory(ExoUtil.buildRenderersFactory(decode)).setMediaSourceFactory(ExoUtil.buildMediaSourceFactory()).build();
         exoPlayer.setAudioAttributes(AudioAttributes.DEFAULT, true);
-        exoPlayer.addAnalyticsListener(new EventLogger());
         exoPlayer.setHandleAudioBecomingNoisy(true);
         view.setRender(Setting.getRender());
         exoPlayer.setPlayWhenReady(true);
@@ -502,33 +501,29 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
         setMediaSource(new HashMap<>(), url);
     }
 
-    private void setMediaSource(Result result, int timeout) {
-        if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(result), position);
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(result, sub, decode, error), position);
-        if (isExo() && exoPlayer != null) exoPlayer.prepare();
-        setTimeoutCheck(result.getHeaders(), result.getRealUrl(), timeout);
+    private void setMediaSource(Map<String, String> headers, String url) {
+        setMediaSource(headers, url, null, null, new ArrayList<>(), Constant.TIMEOUT_PLAY);
+    }
+
+    private void setMediaSource(Map<String, String> headers, String url, String format) {
+        setMediaSource(headers, url, format, null, new ArrayList<>(), Constant.TIMEOUT_PLAY);
     }
 
     private void setMediaSource(Channel channel, int timeout) {
-        if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(channel));
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(channel, sub, decode, error));
-        if (isExo() && exoPlayer != null) exoPlayer.prepare();
-        setTimeoutCheck(channel.getHeaders(), channel.getUrl(), timeout);
+        setMediaSource(channel.getHeaders(), channel.getUrl(), channel.getFormat(), channel.getDrm(), new ArrayList<>(), timeout);
     }
 
-    private void setMediaSource(Map<String, String> headers, String url) {
+    private void setMediaSource(Result result, int timeout) {
+        setMediaSource(result.getHeaders(), result.getRealUrl(), result.getFormat(), result.getDrm(), result.getSubs(), timeout);
+    }
+
+    private void setMediaSource(Map<String, String> headers, String url, String format, Drm drm, List<Sub> subs, int timeout) {
         if (isIjk() && ijkPlayer != null) ijkPlayer.setMediaSource(IjkUtil.getSource(headers, url), position);
-        if (isExo() && exoPlayer != null) exoPlayer.setMediaSource(ExoUtil.getSource(headers, url, sub, decode, error), position);
+        if (isExo() && exoPlayer != null) exoPlayer.setMediaItem(ExoUtil.getMediaItem(this.headers = checkUa(headers), UrlUtil.uri(this.url = url), ExoUtil.getMimeType(this.format = format, error), drm, checkSub(subs), decode), position);
         if (isExo() && exoPlayer != null) exoPlayer.prepare();
-        setTimeoutCheck(headers, url, Constant.TIMEOUT_PLAY);
-    }
-
-    private void setTimeoutCheck(Map<String, String> headers, String url, int timeout) {
         Logger.t(TAG).d(error + "," + url);
         App.post(runnable, timeout);
-        this.headers = headers;
-        PlayerEvent.state(0);
-        this.url = url;
+        PlayerEvent.prepare();
     }
 
     private void removeTimeoutCheck() {
@@ -580,6 +575,12 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
         return headers;
     }
 
+    private List<Sub> checkSub(List<Sub> subs) {
+        if (sub == null) return subs;
+        subs.add(0, sub);
+        return subs;
+    }
+
     public Uri getUri() {
         return getUrl().startsWith("file://") || getUrl().startsWith("/") ? FileUtil.getShareUri(getUrl()) : Uri.parse(getUrl());
     }
@@ -596,22 +597,16 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
         return bundle;
     }
 
-    public void setMetadata(String title, String artist, String logo, PlayerView view) {
-        try {
-            Bitmap bitmap = ((BitmapDrawable) view.getDefaultArtwork()).getBitmap();
-            MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
-            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap);
-            builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
-            builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-            builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, logo);
-            builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, logo);
-            builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, logo);
-            builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDuration());
-            session.setMetadata(builder.build());
-            ActionEvent.update();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    public void setMetadata(String title, String artist, String artUri) {
+        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
+        builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
+        builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
+        builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, artUri);
+        builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, artUri);
+        builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, artUri);
+        builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDuration());
+        session.setMetadata(builder.build());
+        ActionEvent.update();
     }
 
     public void share(Activity activity, CharSequence title) {
