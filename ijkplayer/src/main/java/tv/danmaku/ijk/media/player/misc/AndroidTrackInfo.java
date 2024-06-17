@@ -100,4 +100,10 @@ public class AndroidTrackInfo implements ITrackInfo {
     public void setTrackType(int trackType) {
         mTrackType = trackType;
     }
+
+    @Override
+    public float getFps() {
+        if (mTrackInfo == null || mTrackInfo.getFormat() == null) return 0;
+        return mTrackInfo.getFormat().getFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER);
+    }
 }
