@@ -13,6 +13,7 @@ import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -119,6 +120,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
         builder = new StringBuilder();
         runnable = ErrorEvent::timeout;
         formatter = new Formatter(builder, Locale.getDefault());
+        position = C.TIME_UNSET;
         createSession(activity);
     }
 
@@ -213,6 +215,7 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
     }
 
     public void reset() {
+        position = C.TIME_UNSET;
         removeTimeoutCheck();
         stopParse();
         error = 0;
