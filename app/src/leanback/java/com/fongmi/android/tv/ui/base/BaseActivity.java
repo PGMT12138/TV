@@ -3,6 +3,7 @@ package com.fongmi.android.tv.ui.base;
 import android.app.Activity;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.View;
 
@@ -15,7 +16,6 @@ import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.api.config.WallConfig;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.ResUtil;
