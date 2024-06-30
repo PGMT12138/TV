@@ -27,12 +27,9 @@ import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.bean.Drm;
 import com.fongmi.android.tv.bean.Sub;
 import com.fongmi.android.tv.player.Players;
-import com.fongmi.android.tv.server.Server;
 import com.fongmi.android.tv.utils.Sniffer;
 
-import java.net.URLEncoder;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -99,8 +96,6 @@ public class ExoUtil {
     }
 
     public static MediaItem getMediaItem(Map<String, String> headers, Uri uri, String mimeType, Drm drm, List<Sub> subs, int decode) {
-        boolean m3u8Ad = uri.toString().contains(".m3u8") && (Setting.isRemoveAd() || Sniffer.getRegex(uri).size() > 0);
-        if (m3u8Ad) uri = Uri.parse(Server.get().getAddress(true).concat("/m3u8?url=").concat(URLEncoder.encode(uri.toString())));
         MediaItem.Builder builder = new MediaItem.Builder().setUri(uri);
         builder.setAllowChunklessPreparation(decode == Players.HARD);
         builder.setRequestMetadata(getRequestMetadata(headers, uri));
@@ -108,7 +103,7 @@ public class ExoUtil {
         if (drm != null) builder.setDrmConfiguration(drm.get());
         if (mimeType != null) builder.setMimeType(mimeType);
         builder.setForceUseRtpTcp(Setting.getRtsp() == 1);
-        builder.setAds(Arrays.asList("9999"));
+        builder.setAds(Sniffer.getRegex(uri));
         builder.setMediaId(uri.toString());
         return builder.build();
     }
