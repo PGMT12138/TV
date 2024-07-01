@@ -3,8 +3,12 @@ package com.fongmi.android.tv.utils;
 import android.net.Uri;
 import android.text.TextUtils;
 
+import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.server.Server;
+import com.github.catvod.utils.UriUtil;
 import com.google.common.net.HttpHeaders;
+
+import java.net.URLEncoder;
 
 public class UrlUtil {
 
@@ -35,6 +39,10 @@ public class UrlUtil {
         return path == null ? "" : path.trim();
     }
 
+    public static String resolve(String baseUri, String referenceUri) {
+        return UriUtil.resolve(baseUri, referenceUri);
+    }
+
     public static String convert(String url) {
         String scheme = scheme(url);
         if ("clan".equals(scheme)) return convert(fixUrl(url));
@@ -61,6 +69,9 @@ public class UrlUtil {
     public static String fixDownloadUrl(String url) {
         if (TextUtils.isEmpty(url)) return "";
         Uri uri = UrlUtil.uri(url);
+        boolean m3u8Ad = url.contains(".m3u8") && (Setting.isRemoveAd() || Sniffer.getRegex(uri).size() > 0);
+        if (m3u8Ad) uri = Uri.parse(Server.get().getAddress(true).concat("/m3u8?url=").concat(URLEncoder.encode(url)));
+        if (!uri.toString().startsWith("http://127.0.0.1:") || uri.toString().startsWith("http://127.0.0.1:9978/m3u8")) return uri.toString();
         String download = uri.getQueryParameter("url");
         return TextUtils.isEmpty(download) ? uri.toString() : download;
     }
