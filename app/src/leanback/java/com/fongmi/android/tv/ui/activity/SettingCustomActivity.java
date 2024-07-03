@@ -244,7 +244,7 @@ public class SettingCustomActivity extends BaseActivity implements MenuKeyCallba
         Setting.putLanguage(lang);
         LanguageUtil.setLocale(LanguageUtil.getLocale(Setting.getLanguage()));
         mBinding.languageText.setText((ResUtil.getStringArray(R.array.select_language))[Setting.getLanguage()]);
-        App.post(() -> Util.restartApp(getActivity()), 500);
+        App.post(() -> Util.restartApp(this), 1000);
     }
 
     @Override

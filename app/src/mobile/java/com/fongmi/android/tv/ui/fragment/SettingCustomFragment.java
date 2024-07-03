@@ -123,7 +123,7 @@ public class SettingCustomFragment extends BaseFragment {
             Setting.putLanguage(which);
             LanguageUtil.setLocale(LanguageUtil.getLocale(Setting.getLanguage()));
             dialog.dismiss();
-            App.post(() -> Util.restartApp(getActivity()), 500);
+            App.post(() -> Util.restartApp(getActivity()), 1000);
         }).show();
     }
 
