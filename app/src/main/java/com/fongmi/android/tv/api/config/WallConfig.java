@@ -104,7 +104,7 @@ public class WallConfig {
     }
 
     public boolean needSync(String url) {
-        return sync || TextUtils.isEmpty(config.getUrl()) || url.equals(config.getUrl());
+        return config == null ? false : sync || TextUtils.isEmpty(config.getUrl()) || url.equals(config.getUrl());
     }
 
     public static void refresh(int index) {
