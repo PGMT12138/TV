@@ -98,6 +98,10 @@ public class Players implements Player.Listener, IMediaPlayer.Listener, ParseCal
         return type == EXO;
     }
 
+    public static boolean isHard(int decode) {
+        return decode == HARD;
+    }
+
     public boolean isHard() {
         return decode == HARD;
     }
