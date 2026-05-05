@@ -1,0 +1,13 @@
+{
+  "name": "server",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "axios": "^1.9.0",
+    "better-sqlite3": "^11.9.0",
+    "cors": "^2.8.5"
+  }
+}
