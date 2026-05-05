@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import { loadConfig } from './config/loader.js';
 import { getSpider } from './spider/manager.js';
+import { proxyRequest } from './proxy/handler.js';
+import { parseLiveContent } from './live/parser.js';
 
 const app = express();
 const PORT = 3000;
@@ -141,12 +143,40 @@ app.get('/api/live', async (req, res) => {
       const axios = (await import('axios')).default;
       const { data } = await axios.get(live.url, { timeout: 15000 });
       const text = typeof data === 'string' ? data : JSON.stringify(data);
-      res.json({ raw: text, live });
+      const groups = parseLiveContent(text);
+      res.json(groups);
     } else {
       res.json(live.groups || []);
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/proxy', async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (!url) return res.status(400).json({ error: 'url parameter required' });
+    const headers = req.query.headers ? JSON.parse(req.query.headers) : {};
+    const result = await proxyRequest(url, headers);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(result.status).send(result.data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/img', async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (!url) return res.status(400).send('url required');
+    const result = await proxyRequest(url);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(result.data);
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
