@@ -24,7 +24,6 @@ import androidx.viewbinding.ViewBinding;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.Product;
 import com.fongmi.android.tv.R;
-import com.fongmi.android.tv.Updater;
 import com.fongmi.android.tv.api.config.LiveConfig;
 import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.api.config.WallConfig;
@@ -120,7 +119,6 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
         mClock = Clock.create(mBinding.clock);
         mBinding.progressLayout.showProgress();
         DLNARendererService.start(this);
-        Updater.create().start(this);
         setRecyclerView();
         setViewModel();
         setAdapter();
