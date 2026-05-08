@@ -5,7 +5,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from database import init_db, get_urls, get_all_urls, add_url, update_url, delete_url
 
-app = FastAPI()
+app = FastAPI(root_path="/tv-manage")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 init_db()
