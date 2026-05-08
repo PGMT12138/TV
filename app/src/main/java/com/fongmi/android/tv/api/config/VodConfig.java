@@ -17,11 +17,20 @@ import com.fongmi.android.tv.utils.UrlUtil;
 import com.github.catvod.bean.Doh;
 import com.github.catvod.bean.Header;
 import com.github.catvod.bean.Proxy;
+import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
+import com.fongmi.android.tv.R;
+import com.fongmi.android.tv.server.Server;
+import com.fongmi.android.tv.utils.Notify;
+import com.fongmi.android.tv.utils.Task;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -113,6 +122,110 @@ public class VodConfig extends BaseConfig {
     protected void load(Config config) throws Throwable {
         String json = Decoder.getJson(UrlUtil.convert(config.getUrl()), TAG);
         checkJson(config, Json.parse(json).getAsJsonObject());
+    }
+
+    public void loadFromManage(String manageUrl, Callback callback) {
+        int id = taskId.incrementAndGet();
+        if (future != null && !future.isDone()) future.cancel(true);
+        future = Task.submit(() -> loadFromManageConfig(id, manageUrl, callback));
+        callback.start();
+    }
+
+    private void loadFromManageConfig(int id, String manageUrl, Callback callback) {
+        try {
+            Server.get().start();
+            OkHttp.cancel(getTag());
+            String json = OkHttp.string(manageUrl);
+            JsonObject resp = Json.parse(json).getAsJsonObject();
+            JsonArray urlArray = resp.getAsJsonArray("urls");
+            if (urlArray == null || urlArray.isEmpty()) throw new Exception("Manage API returned empty urls");
+
+            List<Site> allSites = new ArrayList<>();
+            List<Parse> allParses = new ArrayList<>();
+            List<String> allFlags = new ArrayList<>();
+            List<String> allAds = new ArrayList<>();
+            List<Rule> allRules = new ArrayList<>();
+            LinkedHashSet<String> jars = new LinkedHashSet<>();
+            String homeKey = config.getHome();
+            boolean firstConfig = true;
+
+            for (JsonElement elem : urlArray) {
+                if (taskId.get() != id) return;
+                String url = elem.getAsJsonObject().get("url").getAsString();
+                try {
+                    String configJson = Decoder.getJson(UrlUtil.convert(url), TAG);
+                    JsonObject object = Json.parse(configJson).getAsJsonObject();
+                    if (object.has("msg")) continue;
+                    if (object.has("urls")) continue;
+
+                    String spider = Json.safeString(object, "spider");
+                    if (!spider.isEmpty()) jars.add(spider);
+
+                    if (firstConfig) {
+                        initList(object);
+                        allFlags.addAll(getFlags());
+                        allAds.addAll(getAds());
+                        allRules.addAll(getRules());
+                        initLive(config, object);
+                        initWall(config, object);
+                        firstConfig = false;
+                    } else {
+                        String extraSpider = Json.safeString(object, "spider");
+                        if (!extraSpider.isEmpty()) BaseLoader.get().parseJar(extraSpider, true);
+                        allFlags.addAll(Json.safeListString(object, "flags"));
+                        allAds.addAll(Json.safeListString(object, "ads"));
+                        if (!Json.isEmpty(object, "lives")) {
+                            Config temp = Config.find(config, LIVE).save();
+                            boolean sync = LiveConfig.get().needSync(url);
+                            if (sync) LiveConfig.get().config(temp.update()).parse(object);
+                        }
+                    }
+
+                    List<Site> sites = Json.safeListElement(object, "sites").stream()
+                        .map(e -> Site.objectFrom(e, spider))
+                        .collect(Collectors.toCollection(ArrayList::new));
+                    allSites.addAll(sites);
+
+                    List<Parse> parses = Json.safeListElement(object, "parses").stream()
+                        .map(Parse::objectFrom)
+                        .collect(Collectors.toCollection(ArrayList::new));
+                    allParses.addAll(parses);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            for (String jar : jars) BaseLoader.get().parseJar(jar, true);
+
+            Map<String, Site> deduped = new LinkedHashMap<>();
+            for (Site site : allSites) deduped.put(site.getKey(), site);
+            setSites(new ArrayList<>(deduped.values()));
+
+            Map<String, Site> items = Site.findAll().stream().collect(Collectors.toMap(Site::getKey, Function.identity()));
+            getSites().forEach(site -> site.sync(items.get(site.getKey())));
+            setHome(config, getSites().isEmpty() ? new Site() : getSites().stream().filter(item -> item.getKey().equals(homeKey)).findFirst().orElse(getSites().get(0)), false);
+
+            Map<String, Parse> parseMap = new LinkedHashMap<>();
+            for (Parse p : allParses) parseMap.put(p.getName(), p);
+            setParses(new ArrayList<>(parseMap.values()));
+            setParse(config, getParses().isEmpty() ? new Parse() : getParses().stream().filter(item -> item.getName().equals(config.getParse())).findFirst().orElse(getParses().get(0)), false);
+
+            setFlags(new ArrayList<>(new LinkedHashSet<>(allFlags)));
+            setAds(new ArrayList<>(new LinkedHashSet<>(allAds)));
+            setRules(new ArrayList<>(new LinkedHashSet<>(allRules)));
+
+            if (taskId.get() != id) return;
+            if (config.equals(this.config)) config.update();
+            App.post(() -> Notify.show(config.getNotice()));
+            App.post(callback::success);
+        } catch (Throwable e) {
+            e.printStackTrace();
+            if (isCanceled(e)) return;
+            if (taskId.get() != id) return;
+            App.post(() -> callback.error(Notify.getError(R.string.error_config_get, e)));
+        } finally {
+            if (taskId.get() == id) postEvent();
+        }
     }
 
     @Override

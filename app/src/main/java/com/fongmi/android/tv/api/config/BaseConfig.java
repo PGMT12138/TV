@@ -31,11 +31,11 @@ abstract class BaseConfig {
     public static final int WALL = 2;
     public static final int MANAGE = 3;
 
-    private final AtomicInteger taskId = new AtomicInteger(0);
+    protected final AtomicInteger taskId = new AtomicInteger(0);
 
     protected boolean sync;
     protected volatile Config config;
-    private volatile Future<?> future;
+    protected volatile Future<?> future;
 
     protected abstract String getTag();
 
