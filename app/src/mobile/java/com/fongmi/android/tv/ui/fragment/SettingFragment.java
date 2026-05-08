@@ -162,12 +162,16 @@ public class SettingFragment extends BaseFragment implements ConfigCallback, Sit
                 WallConfig.load(config, getCallback());
                 break;
             case 3:
+                for (Config c : Config.getAll(3)) {
+                    if (c.getId() != config.getId()) c.delete();
+                }
+                config.update();
                 String manageUrl = config.getUrl();
                 if (manageUrl.contains("?")) manageUrl = manageUrl.split("\\?")[0] + "?type=0";
                 else manageUrl = manageUrl + (manageUrl.endsWith("/") ? "" : "/") + "api/urls?type=0";
-                VodConfig.get().loadFromManage(manageUrl, getCallback());
+                VodConfig.get().init().loadFromManage(manageUrl, getCallback());
                 String manageLiveUrl = manageUrl.replace("type=0", "type=1");
-                LiveConfig.get().loadFromManage(manageLiveUrl, new Callback() {
+                LiveConfig.get().init().loadFromManage(manageLiveUrl, new Callback() {
                     @Override public void start() {}
                     @Override public void success() {}
                     @Override public void error(String msg) {}
