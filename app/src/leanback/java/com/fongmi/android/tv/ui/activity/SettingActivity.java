@@ -84,6 +84,8 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
         mBinding.vodUrl.setText(VodConfig.getDesc());
         mBinding.liveUrl.setText(LiveConfig.getDesc());
         mBinding.wallUrl.setText(WallConfig.getDesc());
+        Config manageConfig = Config.manage();
+        mBinding.manageUrl.setText(manageConfig.isEmpty() ? "" : manageConfig.getDesc());
         mBinding.versionText.setText(BuildConfig.VERSION_NAME);
         setCacheText();
         setOtherText();
@@ -124,6 +126,7 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
         mBinding.incognito.setOnClickListener(this::setIncognito);
         mBinding.vodHistory.setOnClickListener(this::onVodHistory);
         mBinding.liveHistory.setOnClickListener(this::onLiveHistory);
+        mBinding.manage.setOnClickListener(this::onManage);
         mBinding.wallDefault.setOnClickListener(this::setWallDefault);
         mBinding.wallRefresh.setOnClickListener(this::setWallRefresh);
         mBinding.wallRefresh.setOnLongClickListener(this::onWallHistory);
@@ -149,6 +152,18 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
             case 2:
                 Setting.putWall(0);
                 WallConfig.load(config, getCallback());
+                break;
+            case 3:
+                String manageUrl = config.getUrl();
+                if (manageUrl.contains("?")) manageUrl = manageUrl.split("\\?")[0] + "?type=0";
+                else manageUrl = manageUrl + (manageUrl.endsWith("/") ? "" : "/") + "api/urls?type=0";
+                VodConfig.get().loadFromManage(manageUrl, getCallback());
+                String manageLiveUrl = manageUrl.replace("type=0", "type=1");
+                LiveConfig.get().loadFromManage(manageLiveUrl, new Callback() {
+                    @Override public void start() {}
+                    @Override public void success() {}
+                    @Override public void error(String msg) {}
+                });
                 break;
         }
     }
@@ -190,6 +205,10 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
 
     private void onLive(View view) {
         ConfigDialog.create(this).launcher(launcher).type(type = 1).show();
+    }
+
+    private void onManage(View view) {
+        ConfigDialog.create(this).launcher(launcher).type(type = 3).show();
     }
 
     private void onWall(View view) {
@@ -324,6 +343,8 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
         mBinding.vodUrl.setText(VodConfig.getDesc());
         mBinding.liveUrl.setText(LiveConfig.getDesc());
         mBinding.wallUrl.setText(WallConfig.getDesc());
+        Config manageConfig = Config.manage();
+        mBinding.manageUrl.setText(manageConfig.isEmpty() ? "" : manageConfig.getDesc());
     }
 
     private final ActivityResultLauncher<Intent> launcher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
