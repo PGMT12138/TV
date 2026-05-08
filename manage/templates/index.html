@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Config Management</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        h1 { text-align: center; margin: 20px 0 30px; font-size: 24px; color: #e94560; }
+        .tabs { display: flex; gap: 0; margin-bottom: 20px; }
+        .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; background: #16213e; border: 1px solid #0f3460; color: #aaa; font-size: 16px; transition: all 0.2s; }
+        .tab:first-child { border-radius: 8px 0 0 8px; }
+        .tab:last-child { border-radius: 0 8px 8px 0; }
+        .tab.active { background: #0f3460; color: #fff; }
+        .add-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+        .add-bar input { flex: 1; padding: 10px 12px; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; color: #eee; font-size: 14px; }
+        .add-bar input::placeholder { color: #666; }
+        .add-bar input:focus { outline: none; border-color: #e94560; }
+        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: #e94560; color: #fff; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .btn-edit { background: #0f3460; color: #fff; }
+        .btn-delete { background: #533483; color: #fff; }
+        .btn-toggle { background: #1a1a2e; color: #aaa; border: 1px solid #333; }
+        .btn-toggle.active { background: #0f3460; color: #fff; border-color: #0f3460; }
+        .url-list { list-style: none; }
+        .url-item { display: flex; align-items: center; gap: 10px; padding: 12px; background: #16213e; border: 1px solid #0f3460; border-radius: 8px; margin-bottom: 8px; }
+        .url-item.disabled { opacity: 0.5; }
+        .url-info { flex: 1; min-width: 0; }
+        .url-name { font-weight: 600; font-size: 14px; color: #e94560; }
+        .url-addr { font-size: 13px; color: #888; word-break: break-all; margin-top: 2px; }
+        .url-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        .empty { text-align: center; color: #666; padding: 40px; font-size: 14px; }
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; }
+        .modal h3 { margin-bottom: 16px; color: #e94560; }
+        .modal label { display: block; margin-bottom: 4px; font-size: 13px; color: #aaa; }
+        .modal input { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; color: #eee; font-size: 14px; }
+        .modal input:focus { outline: none; border-color: #e94560; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+        .btn-cancel { background: #333; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TV Config Management</h1>
+        <div class="tabs">
+            <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
+            <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
+        </div>
+        <div class="add-bar">
+            <input type="text" id="inputName" placeholder="Name (optional)">
+            <input type="text" id="inputUrl" placeholder="Config URL">
+            <button class="btn btn-primary" onclick="addUrl()">Add</button>
+        </div>
+        <ul class="url-list" id="urlList"></ul>
+        <div class="empty" id="empty" style="display:none">No URLs configured</div>
+    </div>
+
+    <div class="modal-overlay" id="editModal">
+        <div class="modal">
+            <h3>Edit URL</h3>
+            <label>Name</label>
+            <input type="text" id="editName">
+            <label>URL</label>
+            <input type="text" id="editUrl">
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveEdit()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentType = 0;
+        let editingId = null;
+
+        function switchTab(type) {
+            currentType = type;
+            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.type) === type));
+            loadUrls();
+        }
+
+        async function loadUrls() {
+            const resp = await fetch(`/api/urls/all?type=${currentType}`);
+            const data = await resp.json();
+            const list = document.getElementById('urlList');
+            const empty = document.getElementById('empty');
+            list.innerHTML = '';
+            if (data.urls.length === 0) {
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+            data.urls.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'url-item' + (item.enabled ? '' : ' disabled');
+                li.innerHTML = `
+                    <div class="url-info">
+                        <div class="url-name">${esc(item.name || 'Unnamed')}</div>
+                        <div class="url-addr">${esc(item.url)}</div>
+                    </div>
+                    <div class="url-actions">
+                        <button class="btn btn-sm btn-toggle ${item.enabled ? 'active' : ''}" onclick="toggleUrl(${item.id}, ${!item.enabled})">${item.enabled ? 'ON' : 'OFF'}</button>
+                        <button class="btn btn-sm btn-edit" onclick="openEdit(${item.id}, '${esc(item.name)}', '${esc(item.url)}')">Edit</button>
+                        <button class="btn btn-sm btn-delete" onclick="removeUrl(${item.id})">Del</button>
+                    </div>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        async function addUrl() {
+            const name = document.getElementById('inputName').value.trim();
+            const url = document.getElementById('inputUrl').value.trim();
+            if (!url) return;
+            await fetch('/api/urls', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({type: currentType, name, url})
+            });
+            document.getElementById('inputName').value = '';
+            document.getElementById('inputUrl').value = '';
+            loadUrls();
+        }
+
+        function openEdit(id, name, url) {
+            editingId = id;
+            document.getElementById('editName').value = name;
+            document.getElementById('editUrl').value = url;
+            document.getElementById('editModal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('editModal').classList.remove('show');
+            editingId = null;
+        }
+
+        async function saveEdit() {
+            const name = document.getElementById('editName').value.trim();
+            const url = document.getElementById('editUrl').value.trim();
+            if (!url) return;
+            await fetch(`/api/urls/${editingId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, url})
+            });
+            closeModal();
+            loadUrls();
+        }
+
+        async function toggleUrl(id, enabled) {
+            await fetch(`/api/urls/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled})
+            });
+            loadUrls();
+        }
+
+        async function removeUrl(id) {
+            if (!confirm('Delete this URL?')) return;
+            await fetch(`/api/urls/${id}`, {method: 'DELETE'});
+            loadUrls();
+        }
+
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        loadUrls();
+    </script>
+</body>
+</html>
