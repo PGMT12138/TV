@@ -166,7 +166,6 @@ public class VodConfig extends BaseConfig {
                         allFlags.addAll(getFlags());
                         allAds.addAll(getAds());
                         allRules.addAll(getRules());
-                        initLive(config, object);
                         initWall(config, object);
                         firstConfig = false;
                     } else {
@@ -174,11 +173,6 @@ public class VodConfig extends BaseConfig {
                         if (!extraSpider.isEmpty()) BaseLoader.get().parseJar(extraSpider, true);
                         allFlags.addAll(Json.safeListString(object, "flags"));
                         allAds.addAll(Json.safeListString(object, "ads"));
-                        if (!Json.isEmpty(object, "lives")) {
-                            Config temp = Config.find(config, LIVE).save();
-                            boolean sync = LiveConfig.get().needSync(url);
-                            if (sync) LiveConfig.get().config(temp.update()).parse(object);
-                        }
                     }
 
                     List<Site> sites = Json.safeListElement(object, "sites").stream()

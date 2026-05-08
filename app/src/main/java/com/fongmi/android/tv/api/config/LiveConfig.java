@@ -199,6 +199,7 @@ public class LiveConfig extends BaseConfig {
             setRules(new ArrayList<>(new LinkedHashSet<>(allRules)));
 
             if (taskId.get() != id) return;
+            if (config.isEmpty()) config.url(manageUrl);
             if (config.equals(this.config)) config.update();
             App.post(callback::success);
         } catch (Throwable e) {
