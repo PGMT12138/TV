@@ -86,7 +86,7 @@
         }
 
         async function loadUrls() {
-            const resp = await fetch(`/api/urls/all?type=${currentType}`);
+            const resp = await fetch(`api/urls/all?type=${currentType}`);
             const data = await resp.json();
             const list = document.getElementById('urlList');
             const empty = document.getElementById('empty');
@@ -118,7 +118,7 @@
             const name = document.getElementById('inputName').value.trim();
             const url = document.getElementById('inputUrl').value.trim();
             if (!url) return;
-            await fetch('/api/urls', {
+            await fetch('api/urls', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({type: currentType, name, url})
@@ -144,7 +144,7 @@
             const name = document.getElementById('editName').value.trim();
             const url = document.getElementById('editUrl').value.trim();
             if (!url) return;
-            await fetch(`/api/urls/${editingId}`, {
+            await fetch(`api/urls/${editingId}`, {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({name, url})
@@ -154,7 +154,7 @@
         }
 
         async function toggleUrl(id, enabled) {
-            await fetch(`/api/urls/${id}`, {
+            await fetch(`api/urls/${id}`, {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({enabled})
@@ -164,7 +164,7 @@
 
         async function removeUrl(id) {
             if (!confirm('Delete this URL?')) return;
-            await fetch(`/api/urls/${id}`, {method: 'DELETE'});
+            await fetch(`api/urls/${id}`, {method: 'DELETE'});
             loadUrls();
         }
 
