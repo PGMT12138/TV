@@ -116,6 +116,9 @@ public class ConfigDialog implements DialogInterface.OnDismissListener {
                 return LiveConfig.getUrl();
             case 2:
                 return WallConfig.getUrl();
+            case 3:
+                Config manageConfig = Config.manage();
+                return manageConfig.getUrl();
             default:
                 return "";
         }
