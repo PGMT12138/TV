@@ -99,6 +99,11 @@ public class Config {
         return item == null ? create(2) : item;
     }
 
+    public static Config manage() {
+        Config item = AppDatabase.get().getConfigDao().findOne(3);
+        return item == null ? create(3) : item;
+    }
+
     public static Config find(int id) {
         return AppDatabase.get().getConfigDao().findById(id);
     }

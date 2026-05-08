@@ -29,6 +29,7 @@ abstract class BaseConfig {
     public static final int VOD = 0;
     public static final int LIVE = 1;
     public static final int WALL = 2;
+    public static final int MANAGE = 3;
 
     private final AtomicInteger taskId = new AtomicInteger(0);
 
