@@ -297,6 +297,24 @@ public class SiteApi {
         });
     }
 
+    private static String extractRealUrl(String playUrl) {
+        if (playUrl == null) return "";
+        if (playUrl.contains("127.0.0.1") || playUrl.contains("localhost")) {
+            int idx = playUrl.indexOf("url=");
+            if (idx >= 0) {
+                String encoded = playUrl.substring(idx + 4);
+                int next = encoded.indexOf("&");
+                if (next >= 0) encoded = encoded.substring(0, next);
+                try {
+                    return java.net.URLDecoder.decode(encoded, "UTF-8");
+                } catch (Exception e) {
+                    return encoded;
+                }
+            }
+        }
+        return playUrl;
+    }
+
     public static void uploadVideo(String siteKey, String siteName, Vod vod,
                                    String flag, String episodeName, String episodeUrl,
                                    String playUrl, Map<String, String> headers) {
@@ -307,6 +325,7 @@ public class SiteApi {
             if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
             if (!baseUrl.endsWith("/")) baseUrl += "/";
             baseUrl += "api/videos";
+            String realUrl = extractRealUrl(playUrl);
             JsonObject body = new JsonObject();
             body.addProperty("site_key", siteKey);
             body.addProperty("site_name", siteName);
@@ -321,7 +340,7 @@ public class SiteApi {
             body.addProperty("flag", flag);
             body.addProperty("episode_name", episodeName);
             body.addProperty("episode_url", episodeUrl);
-            body.addProperty("play_url", playUrl);
+            body.addProperty("play_url", realUrl);
             body.addProperty("headers", new Gson().toJson(headers));
             body.addProperty("device_name", com.fongmi.android.tv.utils.Util.getDeviceName());
             RequestBody requestBody = RequestBody.create(body.toString(), MediaType.parse("application/json"));

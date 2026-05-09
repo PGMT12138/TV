@@ -1,6 +1,7 @@
 import os
 import json
 import httpx
+from urllib.parse import urlparse, parse_qs, unquote, quote, urljoin
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -112,6 +113,87 @@ async def list_videos():
     return {"items": get_videos()}
 
 
+def _extract_real_url(url: str) -> str:
+    """Extract real URL from Android local proxy URLs like http://127.0.0.1:9978/proxy?url=..."""
+    parsed = urlparse(url)
+    if parsed.hostname in ("127.0.0.1", "localhost") and "/proxy" in parsed.path:
+        qs = parse_qs(parsed.query)
+        if "url" in qs:
+            return qs["url"][0]
+    return url
+
+
+def _rewrite_m3u8(base_url: str, headers_json: str, m3u8_content: bytes) -> bytes:
+    """Rewrite .ts segment URLs in m3u8 to go through our proxy."""
+    text = m3u8_content.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    rewritten = []
+    for line in lines:
+        line = line.rstrip("\r")
+        if line.startswith("#") or not line.strip():
+            rewritten.append(line)
+            continue
+        # This is a segment URL — make it absolute then proxy it
+        if not line.startswith("http"):
+            line = urljoin(base_url, line)
+        rewritten.append(
+            f"/tv-manage/api/videos/proxy?url={quote(line, safe='')}&headers={quote(headers_json, safe='')}"
+        )
+    return "\n".join(rewritten).encode("utf-8")
+
+
+@app.get("/api/videos/proxy")
+async def proxy_video(request: Request, url: str, headers: str = "{}"):
+    url = _extract_real_url(url)
+    hdrs = json.loads(headers)
+    if "Range" in request.headers:
+        hdrs["Range"] = request.headers["Range"]
+    client = httpx.AsyncClient(follow_redirects=True, timeout=60.0)
+    try:
+        req = client.build_request("GET", url, headers=hdrs)
+        resp = await client.send(req, stream=True)
+    except httpx.ConnectError:
+        await client.aclose()
+        return StreamingResponse(
+            iter([b"Connection failed"]),
+            status_code=502,
+            headers={"Content-Type": "text/plain", "Access-Control-Allow-Origin": "*"},
+        )
+
+    content_type = resp.headers.get("content-type", "")
+    is_m3u8 = ".m3u8" in url or "mpegurl" in content_type
+    if is_m3u8 and "mpegurl" not in content_type:
+        content_type = "application/vnd.apple.mpegurl"
+    elif not content_type:
+        content_type = "video/mp4"
+
+    async def stream():
+        try:
+            if is_m3u8 and resp.status_code == 200:
+                body = await resp.aread()
+                rewritten = _rewrite_m3u8(url, headers, body)
+                yield rewritten
+            else:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    headers_out = {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-cache",
+        "Content-Type": content_type,
+    }
+    for h in ("Content-Length", "Content-Range", "Accept-Ranges"):
+        if h in resp.headers:
+            headers_out[h] = resp.headers[h]
+    if is_m3u8 and resp.status_code == 200:
+        headers_out.pop("Content-Length", None)
+
+    return StreamingResponse(stream(), status_code=resp.status_code, headers=headers_out)
+
+
 @app.get("/api/videos/{video_id}")
 async def get_vid(video_id: int):
     return get_video(video_id)
@@ -131,38 +213,3 @@ async def upload_video(item: VideoUpload):
 async def remove_video(video_id: int):
     delete_video(video_id)
     return {"ok": True}
-
-
-@app.get("/api/videos/proxy")
-async def proxy_video(request: Request, url: str, headers: str = "{}"):
-    hdrs = json.loads(headers)
-    if "Range" in request.headers:
-        hdrs["Range"] = request.headers["Range"]
-    client = httpx.AsyncClient(follow_redirects=True, timeout=60.0, http2=True)
-    req = client.build_request("GET", url, headers=hdrs)
-    resp = await client.send(req, stream=True)
-
-    content_type = resp.headers.get("content-type", "")
-    if ".m3u8" in url and "mpegurl" not in content_type:
-        content_type = "application/vnd.apple.mpegurl"
-    elif not content_type:
-        content_type = "video/mp4"
-
-    async def stream():
-        try:
-            async for chunk in resp.aiter_bytes(chunk_size=65536):
-                yield chunk
-        finally:
-            await resp.aclose()
-            await client.aclose()
-
-    headers_out = {
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "no-cache",
-        "Content-Type": content_type,
-    }
-    for h in ("Content-Length", "Content-Range", "Accept-Ranges"):
-        if h in resp.headers:
-            headers_out[h] = resp.headers[h]
-
-    return StreamingResponse(stream(), status_code=resp.status_code, headers=headers_out)
