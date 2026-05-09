@@ -13,6 +13,7 @@ import com.fongmi.android.tv.bean.Config;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.bean.Vod;
+import com.fongmi.android.tv.utils.Util;
 import com.fongmi.android.tv.player.Source;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Sniffer;
@@ -36,6 +37,8 @@ import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+
+import com.google.gson.Gson;
 
 public class SiteApi {
 
@@ -273,6 +276,41 @@ public class SiteApi {
         return !result.getList().isEmpty();
     }
 
+    public static void uploadVideo(@NonNull String siteKey, @NonNull String siteName,
+                                   @NonNull Vod vod, @NonNull String flag,
+                                   @NonNull String episodeName, @NonNull String episodeUrl,
+                                   @NonNull String playUrl, @NonNull Map<String, String> headers) {
+        try {
+            Config manage = Config.manage();
+            if (manage.isEmpty()) return;
+            String baseUrl = manage.getUrl();
+            if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
+            if (!baseUrl.endsWith("/")) baseUrl += "/";
+            baseUrl += "api/videos";
+            JsonObject body = new JsonObject();
+            body.addProperty("site_key", siteKey);
+            body.addProperty("site_name", siteName);
+            body.addProperty("vod_name", vod.getName());
+            body.addProperty("vod_pic", vod.getPic());
+            body.addProperty("vod_year", vod.getYear());
+            body.addProperty("vod_area", vod.getArea());
+            body.addProperty("vod_director", vod.getDirector());
+            body.addProperty("vod_actor", vod.getActor());
+            body.addProperty("vod_content", vod.getContent());
+            body.addProperty("type_name", vod.getTypeName());
+            body.addProperty("flag", flag);
+            body.addProperty("episode_name", episodeName);
+            body.addProperty("episode_url", episodeUrl);
+            body.addProperty("play_url", playUrl);
+            body.addProperty("headers", App.gson().toJson(headers));
+            RequestBody requestBody = RequestBody.create(body.toString(), MediaType.parse("application/json"));
+            try (Response response = OkHttp.newCall(baseUrl, new HashMap<>(), requestBody).execute()) {
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     public static void uploadAllHomeContents(@NonNull Site homeSite, @NonNull Result homeResult) {
         homeSite.setHasHomeContent(hasContent(homeResult));
         Task.submit(() -> {
@@ -293,5 +331,40 @@ public class SiteApi {
                 }
             }
         });
+    }
+
+    public static void uploadVideo(String siteKey, String siteName, Vod vod,
+                                   String flag, String episodeName, String episodeUrl,
+                                   String playUrl, Map<String, String> headers) {
+        try {
+            Config manage = Config.manage();
+            if (manage.isEmpty()) return;
+            String baseUrl = manage.getUrl();
+            if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
+            if (!baseUrl.endsWith("/")) baseUrl += "/";
+            baseUrl += "api/videos";
+            JsonObject body = new JsonObject();
+            body.addProperty("site_key", siteKey);
+            body.addProperty("site_name", siteName);
+            body.addProperty("vod_name", vod.getName());
+            body.addProperty("vod_pic", vod.getPic());
+            body.addProperty("vod_year", vod.getYear());
+            body.addProperty("vod_area", vod.getArea());
+            body.addProperty("vod_director", vod.getDirector());
+            body.addProperty("vod_actor", vod.getActor());
+            body.addProperty("vod_content", vod.getContent());
+            body.addProperty("type_name", vod.getTypeName());
+            body.addProperty("flag", flag);
+            body.addProperty("episode_name", episodeName);
+            body.addProperty("episode_url", episodeUrl);
+            body.addProperty("play_url", playUrl);
+            body.addProperty("headers", new Gson().toJson(headers));
+            body.addProperty("device_name", Util.getDeviceName());
+            RequestBody requestBody = RequestBody.create(body.toString(), MediaType.parse("application/json"));
+            try (Response response = OkHttp.newCall(baseUrl, new HashMap<>(), requestBody).execute()) {
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

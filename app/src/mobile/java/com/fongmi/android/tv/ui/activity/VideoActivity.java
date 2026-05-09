@@ -553,6 +553,22 @@ public class VideoActivity extends PlaybackActivity implements Clock.Callback, C
         if (result.hasDesc()) setText(mBinding.content, 0, result.getDesc());
         mBinding.control.parse.setVisibility(isUseParse() ? View.VISIBLE : View.GONE);
         startPlayer(getHistoryKey(), result, isUseParse(), getSite().getTimeout(), buildMetadata());
+        uploadPlayback(result);
+    }
+
+    private void uploadPlayback(Result result) {
+        try {
+            Vod vod = mViewModel.getResult().getValue() != null ? mViewModel.getResult().getValue().getVod() : null;
+            if (vod == null) return;
+            String playUrl = result.getRealUrl();
+            if (TextUtils.isEmpty(playUrl)) return;
+            String epName = getEpisode() != null ? getEpisode().getName() : "";
+            String epUrl = getEpisode() != null ? getEpisode().getUrl() : "";
+            Task.submit(() -> SiteApi.uploadVideo(getKey(), getSite().getName(), vod,
+                    result.getFlag(), epName, epUrl, playUrl, result.getHeader()));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     @Override

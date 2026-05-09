@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TV Config Management</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
 
@@ -435,6 +436,107 @@
         ::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.15); border-radius: 2px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(0, 240, 255, 0.3); }
 
+        /* Video grid */
+        .video-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+        .video-grid.show { display: grid; }
+        .video-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+        .video-card:hover { border-color: rgba(0, 240, 255, 0.3); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0, 240, 255, 0.08); }
+        .video-card-img {
+            width: 100%;
+            aspect-ratio: 3/4;
+            object-fit: cover;
+            background: rgba(0, 240, 255, 0.03);
+            display: block;
+        }
+        .video-card-img[src=""] { display: none; }
+        .video-card-body { padding: 10px 12px; }
+        .video-card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .video-card-meta {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .video-card-del {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(0,0,0,0.7);
+            border: none;
+            color: #a03050;
+            width: 24px;
+            height: 24px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .video-card:hover .video-card-del { display: flex; }
+        .video-card-del:hover { color: var(--magenta); }
+
+        /* Player modal */
+        .player-modal { max-width: 900px; width: 95%; }
+        .player-wrap {
+            width: 100%;
+            background: #000;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        .player-wrap video { width: 100%; max-height: 60vh; display: block; }
+        .player-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+        .player-info dt { color: var(--text-dim); text-align: right; white-space: nowrap; }
+        .player-info dd { color: var(--text); margin: 0; }
+
+        .video-filter-bar {
+            display: none;
+            gap: 8px;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+        .video-filter-bar.show { display: flex; }
+        .video-filter-bar input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+        }
+        .video-filter-bar input::placeholder { color: var(--text-dim); }
+        .video-filter-bar input:focus { outline: none; border-color: var(--border-focus); }
+        .video-filter-bar select {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+        }
+        .video-filter-bar select option { background: #0a0e1a; }
+
         /* Scanline overlay */
         body::after {
             content: '';
@@ -462,6 +564,7 @@
             <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
             <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
             <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
+            <div class="tab" data-type="3" onclick="switchTab(3)">播放记录</div>
         </div>
         <div class="add-bar" id="addBar">
             <input type="text" id="inputName" placeholder="NAME (OPTIONAL)">
@@ -479,6 +582,11 @@
             <span class="filter-count" id="filterCount"></span>
         </div>
         <ul class="url-list" id="urlList"></ul>
+        <div class="video-filter-bar" id="videoFilterBar">
+            <input type="text" id="videoSearch" placeholder="搜索影片名称..." oninput="applyVideoFilter()">
+            <select id="videoSiteFilter" onchange="applyVideoFilter()"><option value="">全部来源</option></select>
+        </div>
+        <div class="video-grid" id="videoGrid"></div>
         <div class="empty" id="empty" style="display:none">NO DATA</div>
     </div>
 
@@ -506,6 +614,17 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="playerModal">
+        <div class="modal player-modal">
+            <h3 id="playerTitle">PLAYER</h3>
+            <div class="player-wrap"><video id="videoPlayer" controls autoplay></video></div>
+            <dl class="player-info" id="playerInfo"></dl>
+            <div class="modal-actions" style="margin-top:16px">
+                <button class="btn btn-cancel" onclick="closePlayer()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentType = 0;
         let editingId = null;
@@ -524,9 +643,16 @@
             document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.type) === type));
             const addBar = document.getElementById('addBar');
             const filterBar = document.getElementById('filterBar');
-            addBar.style.display = type === 2 ? 'none' : 'flex';
+            const videoBar = document.getElementById('videoFilterBar');
+            const videoGrid = document.getElementById('videoGrid');
+            const urlList = document.getElementById('urlList');
+            addBar.style.display = type >= 2 ? 'none' : 'flex';
             filterBar.classList.toggle('show', type === 2);
+            videoBar.classList.toggle('show', type === 3);
+            urlList.style.display = type === 3 ? 'none' : '';
+            videoGrid.classList.toggle('show', type === 3);
             if (type === 2) loadHomeContents();
+            else if (type === 3) loadVideos();
             else loadUrls();
         }
 
@@ -769,6 +895,107 @@
             const d = document.createElement('div');
             d.textContent = s;
             return d.innerHTML;
+        }
+
+        // --- Videos ---
+        let videoRawItems = [];
+        let hlsInstance = null;
+
+        async function loadVideos() {
+            const grid = document.getElementById('videoGrid');
+            grid.innerHTML = '<div class="loading" style="grid-column:1/-1"><div class="spinner"></div></div>';
+            document.getElementById('empty').style.display = 'none';
+            const resp = await fetch('api/videos');
+            const data = await resp.json();
+            videoRawItems = data.items;
+            buildVideoFilterOptions();
+            applyVideoFilter();
+        }
+
+        function buildVideoFilterOptions() {
+            const sites = new Set();
+            videoRawItems.forEach(v => { if (v.site_name) sites.add(v.site_name); });
+            document.getElementById('videoSiteFilter').innerHTML =
+                '<option value="">全部来源</option>' + [...sites].sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+        }
+
+        function applyVideoFilter() {
+            const search = document.getElementById('videoSearch').value.trim().toLowerCase();
+            const site = document.getElementById('videoSiteFilter').value;
+            const grid = document.getElementById('videoGrid');
+            const empty = document.getElementById('empty');
+            const filtered = videoRawItems.filter(v => {
+                if (site && v.site_name !== site) return false;
+                if (search && !v.vod_name.toLowerCase().includes(search)) return false;
+                return true;
+            });
+            grid.innerHTML = '';
+            if (filtered.length === 0) {
+                empty.style.display = 'block';
+                empty.textContent = videoRawItems.length === 0 ? '暂无播放记录，App播放视频后会自动上传' : '无匹配结果';
+                return;
+            }
+            empty.style.display = 'none';
+            filtered.forEach(v => {
+                const card = document.createElement('div');
+                card.className = 'video-card';
+                card.innerHTML = `
+                    <button class="video-card-del" onclick="event.stopPropagation();removeVideo(${v.id})">×</button>
+                    ${v.vod_pic ? `<img class="video-card-img" src="${esc(v.vod_pic)}" loading="lazy" onerror="this.style.display='none'">` : ''}
+                    <div class="video-card-body">
+                        <div class="video-card-title">${esc(v.vod_name || '未知')}</div>
+                        <div class="video-card-meta">${esc(v.episode_name || '')}${v.site_name ? ' · ' + esc(v.site_name) : ''}${v.device_name ? ' · ' + esc(v.device_name) : ''}</div>
+                    </div>
+                `;
+                card.onclick = () => playVideo(v);
+                grid.appendChild(card);
+            });
+        }
+
+        async function playVideo(v) {
+            const modal = document.getElementById('playerModal');
+            const player = document.getElementById('videoPlayer');
+            document.getElementById('playerTitle').textContent = v.vod_name + (v.episode_name ? ' - ' + v.episode_name : '');
+
+            const info = document.getElementById('playerInfo');
+            const rows = [];
+            if (v.type_name) rows.push(['类型', v.type_name]);
+            if (v.vod_year) rows.push(['年份', v.vod_year]);
+            if (v.vod_area) rows.push(['地区', v.vod_area]);
+            if (v.vod_director) rows.push(['导演', v.vod_director]);
+            if (v.vod_actor) rows.push(['演员', v.vod_actor]);
+            if (v.vod_content) rows.push(['简介', v.vod_content.replace(/<[^>]*>/g, '').substring(0, 200)]);
+            if (v.site_name) rows.push(['来源', v.site_name]);
+            if (v.device_name) rows.push(['设备', v.device_name]);
+            rows.push(['更新', formatTime(v.updated_at)]);
+            info.innerHTML = rows.map(([k,val]) => `<dt>${k}</dt><dd>${esc(val)}</dd>`).join('');
+
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+
+            const proxyUrl = `api/videos/proxy?url=${encodeURIComponent(v.play_url)}&headers=${encodeURIComponent(v.headers)}`;
+            if (Hls.isSupported() && (/\.m3u8/i.test(v.play_url) || !/\.mp4|\.mkv|\.avi|\.flv/i.test(v.play_url))) {
+                hlsInstance = new Hls();
+                hlsInstance.loadSource(proxyUrl);
+                hlsInstance.attachMedia(player);
+                modal.classList.add('show');
+            } else {
+                player.src = proxyUrl;
+                modal.classList.add('show');
+            }
+        }
+
+        function closePlayer() {
+            const player = document.getElementById('videoPlayer');
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+            player.pause();
+            player.src = '';
+            document.getElementById('playerModal').classList.remove('show');
+        }
+
+        async function removeVideo(id) {
+            if (!confirm('Delete this video?')) return;
+            await fetch(`api/videos/${id}`, {method: 'DELETE'});
+            await loadVideos();
         }
 
         loadUrls();

@@ -40,6 +40,34 @@ def init_db():
         conn.execute("ALTER TABLE home_contents ADD COLUMN config_name TEXT DEFAULT ''")
     except Exception:
         pass
+    try:
+        conn.execute("ALTER TABLE videos ADD COLUMN device_name TEXT DEFAULT ''")
+    except Exception:
+        pass
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vod_name TEXT NOT NULL DEFAULT '',
+            vod_pic TEXT DEFAULT '',
+            vod_year TEXT DEFAULT '',
+            vod_area TEXT DEFAULT '',
+            vod_director TEXT DEFAULT '',
+            vod_actor TEXT DEFAULT '',
+            vod_content TEXT DEFAULT '',
+            type_name TEXT DEFAULT '',
+            site_key TEXT NOT NULL DEFAULT '',
+            site_name TEXT DEFAULT '',
+            flag TEXT DEFAULT '',
+            episode_name TEXT DEFAULT '',
+            episode_url TEXT DEFAULT '',
+            play_url TEXT NOT NULL DEFAULT '',
+            headers TEXT DEFAULT '{}',
+            device_name TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_site_ep ON videos(site_key, episode_url)")
     conn.commit()
     conn.close()
 
@@ -144,5 +172,51 @@ def get_home_content(site_key: str) -> dict:
 def delete_home_content(site_key: str):
     conn = get_conn()
     conn.execute("DELETE FROM home_contents WHERE site_key = ?", (site_key,))
+    conn.commit()
+    conn.close()
+
+
+def upsert_video(site_key: str, episode_url: str, vod_name: str, vod_pic: str,
+                 vod_year: str, vod_area: str, vod_director: str, vod_actor: str,
+                 vod_content: str, type_name: str, site_name: str, flag: str,
+                 episode_name: str, play_url: str, headers: str,
+                 device_name: str = "") -> dict:
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    existing = conn.execute("SELECT id, created_at FROM videos WHERE site_key = ? AND episode_url = ?", (site_key, episode_url)).fetchone()
+    created = existing["created_at"] if existing else now
+    conn.execute("""
+        INSERT OR REPLACE INTO videos (site_key, episode_url, vod_name, vod_pic, vod_year, vod_area,
+            vod_director, vod_actor, vod_content, type_name, site_name, flag,
+            episode_name, play_url, headers, device_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (site_key, episode_url, vod_name, vod_pic, vod_year, vod_area,
+          vod_director, vod_actor, vod_content, type_name, site_name, flag,
+          episode_name, play_url, headers, device_name, created, now))
+    conn.commit()
+    row = conn.execute("SELECT * FROM videos WHERE site_key = ? AND episode_url = ?", (site_key, episode_url)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_videos() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM videos ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_video(video_id: int) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise ValueError("Not found")
+    return dict(row)
+
+
+def delete_video(video_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
     conn.commit()
     conn.close()
