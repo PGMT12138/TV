@@ -31,6 +31,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -275,16 +277,21 @@ public class SiteApi {
         return !result.getList().isEmpty();
     }
 
+    private static final ExecutorService uploadExecutor = Executors.newFixedThreadPool(10);
+
     public static void uploadAllHomeContents(@NonNull Site homeSite, @NonNull Result homeResult) {
         homeSite.setHasHomeContent(hasContent(homeResult));
-        Task.submit(() -> {
+        List<Future<?>> futures = new ArrayList<>();
+        futures.add(uploadExecutor.submit(() -> {
             try {
                 uploadHomeContent(homeSite, homeResult);
             } catch (Exception e) {
                 e.printStackTrace();
             }
-            for (Site site : VodConfig.get().getSites()) {
-                if (site.getKey().equals(homeSite.getKey())) continue;
+        }));
+        for (Site site : VodConfig.get().getSites()) {
+            if (site.getKey().equals(homeSite.getKey())) continue;
+            futures.add(uploadExecutor.submit(() -> {
                 try {
                     Result result = homeContent(site);
                     site.setHasHomeContent(hasContent(result));
@@ -293,6 +300,11 @@ public class SiteApi {
                     e.printStackTrace();
                     site.setHasHomeContent(false);
                 }
+            }));
+        }
+        uploadExecutor.submit(() -> {
+            for (Future<?> future : futures) {
+                try { future.get(); } catch (Exception e) { e.printStackTrace(); }
             }
         });
     }
