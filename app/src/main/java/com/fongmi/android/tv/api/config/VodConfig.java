@@ -151,7 +151,9 @@ public class VodConfig extends BaseConfig {
 
             for (JsonElement elem : urlArray) {
                 if (taskId.get() != id) return;
-                String url = elem.getAsJsonObject().get("url").getAsString();
+                JsonObject urlObj = elem.getAsJsonObject();
+                String url = urlObj.get("url").getAsString();
+                String urlName = urlObj.has("name") ? urlObj.get("name").getAsString() : url;
                 try {
                     String configJson = Decoder.getJson(UrlUtil.convert(url), TAG);
                     JsonObject object = Json.parse(configJson).getAsJsonObject();
@@ -178,6 +180,7 @@ public class VodConfig extends BaseConfig {
                     List<Site> sites = Json.safeListElement(object, "sites").stream()
                         .map(e -> Site.objectFrom(e, spider))
                         .collect(Collectors.toCollection(ArrayList::new));
+                    sites.forEach(s -> s.setConfigName(urlName));
                     allSites.addAll(sites);
 
                     List<Parse> parses = Json.safeListElement(object, "parses").stream()

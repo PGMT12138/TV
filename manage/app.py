@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from database import init_db, get_urls, get_all_urls, add_url, update_url, delete_url
+from database import init_db, get_urls, get_all_urls, add_url, update_url, delete_url, upsert_home_content, get_home_contents, get_home_content, delete_home_content
 
 app = FastAPI(root_path="/tv-manage")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
@@ -53,4 +53,32 @@ async def modify_url(url_id: int, item: UrlUpdate):
 @app.delete("/api/urls/{url_id}")
 async def remove_url(url_id: int):
     delete_url(url_id)
+    return {"ok": True}
+
+
+class HomeContentUpload(BaseModel):
+    site_key: str
+    site_name: str = ""
+    config_name: str = ""
+    content: str
+
+
+@app.get("/api/home-contents")
+async def list_home_contents():
+    return {"items": get_home_contents()}
+
+
+@app.get("/api/home-contents/{site_key}")
+async def get_home(site_key: str):
+    return get_home_content(site_key)
+
+
+@app.post("/api/home-contents")
+async def upload_home_content(item: HomeContentUpload):
+    return upsert_home_content(item.site_key, item.site_name, item.config_name, item.content)
+
+
+@app.delete("/api/home-contents/{site_key}")
+async def remove_home_content(site_key: str):
+    delete_home_content(site_key)
     return {"ok": True}

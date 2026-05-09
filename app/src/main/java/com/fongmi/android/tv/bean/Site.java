@@ -106,6 +106,12 @@ public class Site implements Parcelable {
     @Ignore
     private boolean activated;
 
+    @Ignore
+    private String configName;
+
+    @Ignore
+    private boolean hasHomeContent = true;
+
     public Site() {
     }
 
@@ -290,6 +296,22 @@ public class Site implements Parcelable {
     public Site setChangeable(boolean changeable) {
         if (getChangeable() != 0) setChangeable(changeable ? 1 : 2);
         return this;
+    }
+
+    public String getConfigName() {
+        return configName == null ? "" : configName;
+    }
+
+    public void setConfigName(String configName) {
+        this.configName = configName;
+    }
+
+    public boolean hasHomeContent() {
+        return hasHomeContent;
+    }
+
+    public void setHasHomeContent(boolean hasHomeContent) {
+        this.hasHomeContent = hasHomeContent;
     }
 
     public boolean isQuickSearch() {

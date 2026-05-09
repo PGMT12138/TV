@@ -73,17 +73,18 @@ public class SiteAdapter extends RecyclerView.Adapter<SiteAdapter.ViewHolder> {
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Site item = mItems.get(position);
-        boolean on = !search || change;
+        boolean on = (!search || change) && item.hasHomeContent();
         holder.binding.text.setText(item.getName());
         holder.binding.text.setEnabled(on);
         holder.binding.text.setFocusable(on);
         holder.binding.text.setSelected(on && item.isActivated());
         holder.binding.text.setActivated(on && item.isActivated());
+        holder.binding.text.setAlpha(item.hasHomeContent() ? 1f : 0.4f);
         holder.binding.search.setImageResource(getSearchIcon(item));
         holder.binding.change.setImageResource(getChangeIcon(item));
         holder.binding.search.setVisibility(search ? View.VISIBLE : View.GONE);
         holder.binding.change.setVisibility(change ? View.VISIBLE : View.GONE);
-        holder.binding.text.setOnClickListener(v -> listener.onTextClick(item));
+        holder.binding.text.setOnClickListener(v -> { if (item.hasHomeContent()) listener.onTextClick(item); });
         holder.binding.search.setOnClickListener(v -> listener.onSearchClick(position, item));
         holder.binding.change.setOnClickListener(v -> listener.onChangeClick(position, item));
         holder.binding.search.setOnLongClickListener(v -> listener.onSearchLongClick(item));

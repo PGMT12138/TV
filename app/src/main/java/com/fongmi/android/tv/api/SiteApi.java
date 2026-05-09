@@ -9,17 +9,20 @@ import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.bean.Class;
+import com.fongmi.android.tv.bean.Config;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.bean.Vod;
 import com.fongmi.android.tv.player.Source;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Sniffer;
+import com.fongmi.android.tv.utils.Task;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Prefers;
 import com.github.catvod.utils.Util;
+import com.google.gson.JsonObject;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -30,6 +33,8 @@ import java.util.Map;
 import java.util.Objects;
 
 import okhttp3.Call;
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 public class SiteApi {
@@ -241,5 +246,52 @@ public class SiteApi {
         result.getTypes().forEach(type -> typeByName.put(type.getTypeName(), type));
         List<Class> types = site.getCategories().stream().map(typeByName::get).filter(Objects::nonNull).toList();
         if (!types.isEmpty()) result.setTypes(types);
+    }
+
+    private static void uploadHomeContent(@NonNull Site site, @NonNull Result result) {
+        try {
+            Config manage = Config.manage();
+            if (manage.isEmpty()) return;
+            String baseUrl = manage.getUrl();
+            if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
+            if (!baseUrl.endsWith("/")) baseUrl += "/";
+            baseUrl += "api/home-contents";
+            JsonObject body = new JsonObject();
+            body.addProperty("site_key", site.getKey());
+            body.addProperty("site_name", site.getName());
+            body.addProperty("config_name", site.getConfigName());
+            body.addProperty("content", result.toString());
+            RequestBody requestBody = RequestBody.create(body.toString(), MediaType.parse("application/json"));
+            try (Response response = OkHttp.newCall(baseUrl, new HashMap<>(), requestBody).execute()) {
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static boolean hasContent(@NonNull Result result) {
+        return !result.getList().isEmpty();
+    }
+
+    public static void uploadAllHomeContents(@NonNull Site homeSite, @NonNull Result homeResult) {
+        homeSite.setHasHomeContent(hasContent(homeResult));
+        Task.submit(() -> {
+            try {
+                uploadHomeContent(homeSite, homeResult);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            for (Site site : VodConfig.get().getSites()) {
+                if (site.getKey().equals(homeSite.getKey())) continue;
+                try {
+                    Result result = homeContent(site);
+                    site.setHasHomeContent(hasContent(result));
+                    uploadHomeContent(site, result);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    site.setHasHomeContent(false);
+                }
+            }
+        });
     }
 }

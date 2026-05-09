@@ -72,9 +72,11 @@ public class SiteAdapter extends RecyclerView.Adapter<SiteAdapter.ViewHolder> {
         holder.binding.check.setChecked(getChecked(item));
         holder.binding.text.setSelected(item.isActivated());
         holder.binding.text.setActivated(item.isActivated());
+        holder.binding.text.setAlpha(item.hasHomeContent() ? 1f : 0.4f);
         holder.binding.check.setVisibility(type == 0 ? View.GONE : View.VISIBLE);
         holder.binding.getRoot().setOnLongClickListener(v -> setLongListener(item));
         holder.binding.getRoot().setOnClickListener(v -> setListener(item, position));
+        holder.binding.getRoot().setFocusable(item.hasHomeContent());
         holder.binding.text.setGravity(Setting.getSiteMode() == 0 ? Gravity.CENTER : Gravity.START);
     }
 
@@ -85,7 +87,7 @@ public class SiteAdapter extends RecyclerView.Adapter<SiteAdapter.ViewHolder> {
     }
 
     private void setListener(Site item, int position) {
-        if (type == 0) listener.onItemClick(item);
+        if (type == 0 && item.hasHomeContent()) listener.onItemClick(item);
         if (type == 1) item.setSearchable(!item.isSearchable()).save();
         if (type == 2) item.setChangeable(!item.isChangeable()).save();
         if (type != 0) notifyItemChanged(position);

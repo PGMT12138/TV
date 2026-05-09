@@ -27,6 +27,19 @@ def init_db():
             created_at TEXT DEFAULT ''
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS home_contents (
+            site_key TEXT PRIMARY KEY,
+            site_name TEXT DEFAULT '',
+            config_name TEXT DEFAULT '',
+            content TEXT NOT NULL,
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+    try:
+        conn.execute("ALTER TABLE home_contents ADD COLUMN config_name TEXT DEFAULT ''")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -95,5 +108,41 @@ def update_url(row_id: int, name: str = None, url: str = None, sort: int = None,
 def delete_url(row_id: int):
     conn = get_conn()
     conn.execute("DELETE FROM urls WHERE id = ?", (row_id,))
+    conn.commit()
+    conn.close()
+
+
+def upsert_home_content(site_key: str, site_name: str, config_name: str, content: str) -> dict:
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO home_contents (site_key, site_name, config_name, content, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (site_key, site_name, config_name, content, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents WHERE site_key = ?", (site_key,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_home_contents() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_home_content(site_key: str) -> dict:
+    conn = get_conn()
+    row = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents WHERE site_key = ?", (site_key,)).fetchone()
+    conn.close()
+    if row is None:
+        raise ValueError("Not found")
+    return dict(row)
+
+
+def delete_home_content(site_key: str):
+    conn = get_conn()
+    conn.execute("DELETE FROM home_contents WHERE site_key = ?", (site_key,))
     conn.commit()
     conn.close()
