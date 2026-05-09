@@ -5,68 +5,486 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TV Config Management</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+
+        :root {
+            --cyan: #00f0ff;
+            --cyan-dim: #00889a;
+            --magenta: #ff0066;
+            --bg-deep: #05060f;
+            --bg-card: rgba(8, 18, 40, 0.85);
+            --bg-input: rgba(0, 240, 255, 0.04);
+            --border: rgba(0, 240, 255, 0.12);
+            --border-focus: rgba(0, 240, 255, 0.5);
+            --text: #e4ecf5;
+            --text-dim: #7a96b0;
+            --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.15);
+            --glow-magenta: 0 0 20px rgba(255, 0, 102, 0.15);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-        h1 { text-align: center; margin: 20px 0 30px; font-size: 24px; color: #e94560; }
-        .tabs { display: flex; gap: 0; margin-bottom: 20px; }
-        .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; background: #16213e; border: 1px solid #0f3460; color: #aaa; font-size: 16px; transition: all 0.2s; }
-        .tab:first-child { border-radius: 8px 0 0 8px; }
-        .tab:last-child { border-radius: 0 8px 8px 0; }
-        .tab.active { background: #0f3460; color: #fff; }
-        .add-bar { display: flex; gap: 8px; margin-bottom: 16px; }
-        .add-bar input { flex: 1; padding: 10px 12px; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; color: #eee; font-size: 14px; }
-        .add-bar input::placeholder { color: #666; }
-        .add-bar input:focus { outline: none; border-color: #e94560; }
-        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: opacity 0.2s; }
-        .btn:hover { opacity: 0.85; }
-        .btn-primary { background: #e94560; color: #fff; }
-        .btn-sm { padding: 6px 12px; font-size: 12px; }
-        .btn-edit { background: #0f3460; color: #fff; }
-        .btn-delete { background: #533483; color: #fff; }
-        .btn-toggle { background: #1a1a2e; color: #aaa; border: 1px solid #333; }
-        .btn-toggle.active { background: #0f3460; color: #fff; border-color: #0f3460; }
+
+        body {
+            font-family: 'Rajdhani', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse at 20% 0%, rgba(0, 240, 255, 0.06) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, rgba(255, 0, 102, 0.04) 0%, transparent 60%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 24px 20px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+            padding: 28px 0 24px;
+            position: relative;
+        }
+
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+            opacity: 0.4;
+        }
+
+        h1 {
+            font-family: 'Orbitron', monospace;
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            color: var(--cyan);
+            text-shadow: 0 0 30px rgba(0, 240, 255, 0.3);
+        }
+
+        .header-sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            letter-spacing: 4px;
+            margin-top: 6px;
+            text-transform: uppercase;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 2px;
+            margin-bottom: 20px;
+            background: rgba(0, 240, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 3px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 11px;
+            text-align: center;
+            cursor: pointer;
+            color: var(--text-dim);
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            transition: all 0.3s;
+            border-radius: 2px;
+            position: relative;
+        }
+
+        .tab:hover { color: var(--text); }
+
+        .tab.active {
+            color: var(--cyan);
+            background: rgba(0, 240, 255, 0.08);
+            box-shadow: inset 0 0 20px rgba(0, 240, 255, 0.05);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 20%;
+            width: 60%;
+            height: 1px;
+            background: var(--cyan);
+            box-shadow: 0 0 8px var(--cyan);
+        }
+
+        /* Add Bar */
+        .add-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .add-bar input {
+            flex: 1;
+            padding: 11px 14px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        .add-bar input::placeholder { color: var(--text-dim); letter-spacing: 1px; }
+
+        .add-bar input:focus {
+            outline: none;
+            border-color: var(--border-focus);
+            box-shadow: var(--glow-cyan);
+            background: rgba(0, 240, 255, 0.06);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.25s;
+            position: relative;
+        }
+
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.15), rgba(0, 240, 255, 0.05));
+            border-color: var(--cyan-dim);
+            color: var(--cyan);
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.25), rgba(0, 240, 255, 0.1));
+            box-shadow: var(--glow-cyan);
+        }
+
+        .btn-sm { padding: 6px 14px; font-size: 12px; }
+
+        .btn-edit {
+            background: rgba(0, 240, 255, 0.06);
+            border-color: rgba(0, 240, 255, 0.2);
+            color: var(--cyan-dim);
+        }
+        .btn-edit:hover { color: var(--cyan); box-shadow: var(--glow-cyan); }
+
+        .btn-copy {
+            background: rgba(0, 180, 100, 0.06);
+            border-color: rgba(0, 180, 100, 0.2);
+            color: #3a8a60;
+        }
+        .btn-copy:hover { color: #00e676; box-shadow: 0 0 20px rgba(0, 230, 118, 0.15); }
+        .btn-copy.copied { color: #00e676; border-color: rgba(0, 230, 118, 0.4); }
+
+        .btn-delete {
+            background: rgba(255, 0, 102, 0.06);
+            border-color: rgba(255, 0, 102, 0.2);
+            color: #a03050;
+        }
+        .btn-delete:hover { color: var(--magenta); box-shadow: var(--glow-magenta); }
+
+        .btn-toggle {
+            background: transparent;
+            border-color: rgba(0, 240, 255, 0.15);
+            color: var(--text-dim);
+        }
+        .btn-toggle.active {
+            background: rgba(0, 240, 255, 0.1);
+            border-color: var(--cyan-dim);
+            color: var(--cyan);
+            box-shadow: inset 0 0 12px rgba(0, 240, 255, 0.05);
+        }
+
+        .btn-cancel {
+            background: transparent;
+            border-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-dim);
+        }
+        .btn-cancel:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+
+        /* List */
         .url-list { list-style: none; }
-        .url-item { display: flex; align-items: center; gap: 10px; padding: 12px; background: #16213e; border: 1px solid #0f3460; border-radius: 8px; margin-bottom: 8px; }
-        .url-item.disabled { opacity: 0.5; }
+
+        .url-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            margin-bottom: 6px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .url-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--cyan);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .url-item:hover { border-color: rgba(0, 240, 255, 0.2); }
+        .url-item:hover::before { opacity: 0.6; }
+
+        .url-item.disabled { opacity: 0.35; }
+        .url-item.disabled::before { background: var(--text-dim); }
+
         .url-info { flex: 1; min-width: 0; }
-        .url-name { font-weight: 600; font-size: 14px; color: #e94560; }
-        .url-addr { font-size: 13px; color: #888; word-break: break-all; margin-top: 2px; }
+
+        .url-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #fff;
+            letter-spacing: 0.5px;
+        }
+
+        .url-addr {
+            font-size: 13px;
+            color: #a0b8cc;
+            word-break: break-all;
+            margin-top: 3px;
+            font-family: 'Courier New', monospace;
+        }
+
         .url-actions { display: flex; gap: 6px; flex-shrink: 0; }
-        .empty { text-align: center; color: #666; padding: 40px; font-size: 14px; }
-        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+
+        .home-meta {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 3px;
+            letter-spacing: 0.3px;
+        }
+
+        .empty {
+            text-align: center;
+            color: var(--text-dim);
+            padding: 50px 20px;
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 4, 12, 0.85);
+            backdrop-filter: blur(6px);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
         .modal-overlay.show { display: flex; }
-        .modal { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 12px; padding: 24px; width: 90%; max-width: 700px; max-height: 85vh; overflow: auto; }
-        .modal h3 { margin-bottom: 16px; color: #e94560; }
-        .modal label { display: block; margin-bottom: 4px; font-size: 13px; color: #aaa; }
-        .modal input { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; color: #eee; font-size: 14px; }
-        .modal input:focus { outline: none; border-color: #e94560; }
-        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-        .btn-cancel { background: #333; color: #aaa; }
-        .json-viewer { background: #0f3460; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 55vh; overflow: auto; color: #eee; margin-bottom: 12px; }
-        .home-meta { font-size: 12px; color: #888; margin-top: 2px; }
+
+        .modal {
+            background: linear-gradient(160deg, rgba(8, 18, 40, 0.97), rgba(5, 6, 15, 0.98));
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 28px;
+            width: 90%;
+            max-width: 700px;
+            max-height: 85vh;
+            overflow: auto;
+            box-shadow: 0 0 60px rgba(0, 240, 255, 0.05), inset 0 1px 0 rgba(0, 240, 255, 0.05);
+        }
+
+        .modal h3 {
+            margin-bottom: 20px;
+            font-family: 'Orbitron', monospace;
+            font-size: 16px;
+            color: var(--cyan);
+            letter-spacing: 3px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .modal input {
+            width: 100%;
+            padding: 11px 14px;
+            margin-bottom: 14px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        .modal input:focus {
+            outline: none;
+            border-color: var(--border-focus);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+
+        .json-viewer {
+            background: rgba(0, 240, 255, 0.03);
+            border: 1px solid var(--border);
+            padding: 16px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 55vh;
+            overflow: auto;
+            color: var(--text);
+            margin-bottom: 14px;
+        }
+
+        /* Filter bar */
+        .filter-bar {
+            display: none;
+            gap: 8px;
+            margin-bottom: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-bar.show { display: flex; }
+        .filter-bar select {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 120px;
+        }
+        .filter-bar select:focus {
+            outline: none;
+            border-color: var(--border-focus);
+            box-shadow: var(--glow-cyan);
+        }
+        .filter-bar select option { background: #0a0e1a; color: var(--text); }
+        .filter-count {
+            font-size: 13px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            margin-left: auto;
+        }
+
+        /* Loading */
+        .loading { display: flex; justify-content: center; align-items: center; padding: 50px; }
+        .spinner {
+            width: 36px;
+            height: 36px;
+            border: 2px solid rgba(0, 240, 255, 0.1);
+            border-top-color: var(--cyan);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.15); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(0, 240, 255, 0.3); }
+
+        /* Scanline overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 240, 255, 0.008) 2px,
+                rgba(0, 240, 255, 0.008) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>TV Config Management</h1>
+        <div class="header">
+            <h1>TV CONFIG</h1>
+            <div class="header-sub">Management System</div>
+        </div>
         <div class="tabs">
             <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
             <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
             <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
         </div>
         <div class="add-bar" id="addBar">
-            <input type="text" id="inputName" placeholder="Name (optional)">
-            <input type="text" id="inputUrl" placeholder="Config URL">
-            <button class="btn btn-primary" onclick="addUrl()">Add</button>
+            <input type="text" id="inputName" placeholder="NAME (OPTIONAL)">
+            <input type="text" id="inputUrl" placeholder="CONFIG URL">
+            <button class="btn btn-primary" onclick="addUrl()">ADD</button>
+        </div>
+        <div class="filter-bar" id="filterBar">
+            <select id="filterSpider" onchange="applyHomeFilter()"><option value="">全部类型</option></select>
+            <select id="filterSource" onchange="applyHomeFilter()"><option value="">全部来源</option></select>
+            <select id="filterVideo" onchange="applyHomeFilter()">
+                <option value="">全部</option>
+                <option value="yes">有视频</option>
+                <option value="no">无视频</option>
+            </select>
+            <span class="filter-count" id="filterCount"></span>
         </div>
         <ul class="url-list" id="urlList"></ul>
-        <div class="empty" id="empty" style="display:none">No data</div>
+        <div class="empty" id="empty" style="display:none">NO DATA</div>
     </div>
 
     <div class="modal-overlay" id="editModal">
         <div class="modal">
-            <h3>Edit URL</h3>
+            <h3>EDIT URL</h3>
             <label>Name</label>
             <input type="text" id="editName">
             <label>URL</label>
@@ -80,7 +498,7 @@
 
     <div class="modal-overlay" id="homeModal">
         <div class="modal">
-            <h3 id="homeModalTitle">Home Content</h3>
+            <h3 id="homeModalTitle">HOME CONTENT</h3>
             <div class="json-viewer" id="homeJsonViewer"></div>
             <div class="modal-actions">
                 <button class="btn btn-cancel" onclick="closeHomeModal()">Close</button>
@@ -92,16 +510,28 @@
         let currentType = 0;
         let editingId = null;
 
+        function showLoading() {
+            document.getElementById('urlList').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            document.getElementById('empty').style.display = 'none';
+        }
+
+        function setLoadingBtns(loading) {
+            document.querySelectorAll('.btn').forEach(b => b.disabled = loading);
+        }
+
         function switchTab(type) {
             currentType = type;
             document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.type) === type));
             const addBar = document.getElementById('addBar');
+            const filterBar = document.getElementById('filterBar');
             addBar.style.display = type === 2 ? 'none' : 'flex';
+            filterBar.classList.toggle('show', type === 2);
             if (type === 2) loadHomeContents();
             else loadUrls();
         }
 
         async function loadUrls() {
+            showLoading();
             const resp = await fetch(`api/urls/all?type=${currentType}`);
             const data = await resp.json();
             const list = document.getElementById('urlList');
@@ -109,7 +539,7 @@
             list.innerHTML = '';
             if (data.urls.length === 0) {
                 empty.style.display = 'block';
-                empty.textContent = 'No URLs configured';
+                empty.textContent = 'NO URLS CONFIGURED';
                 return;
             }
             empty.style.display = 'none';
@@ -131,35 +561,75 @@
             });
         }
 
+        let homeRawItems = [];
+
         async function loadHomeContents() {
+            showLoading();
             const resp = await fetch('api/home-contents');
             const data = await resp.json();
+            homeRawItems = data.items.sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+            buildFilterOptions();
+            applyHomeFilter();
+        }
+
+        function parseItemMeta(item) {
+            let vodCount = 0, typeCount = 0;
+            try {
+                const obj = JSON.parse(item.content);
+                if (obj.list) vodCount = obj.list.length;
+                if (obj.types || obj.class) typeCount = (obj.types || obj.class).length;
+            } catch(e) {}
+            const spiderType = item.site_key.includes('_') ? item.site_key.split('_')[0] : item.site_key;
+            return { vodCount, typeCount, spiderType };
+        }
+
+        function buildFilterOptions() {
+            const spiders = new Set(), sources = new Set();
+            homeRawItems.forEach(item => {
+                const m = parseItemMeta(item);
+                spiders.add(m.spiderType);
+                if (item.config_name) sources.add(item.config_name);
+            });
+            const selSpider = document.getElementById('filterSpider');
+            const selSource = document.getElementById('filterSource');
+            selSpider.innerHTML = '<option value="">全部类型</option>' + [...spiders].sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+            selSource.innerHTML = '<option value="">全部来源</option>' + [...sources].sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+        }
+
+        function applyHomeFilter() {
+            const fSpider = document.getElementById('filterSpider').value;
+            const fSource = document.getElementById('filterSource').value;
+            const fVideo = document.getElementById('filterVideo').value;
             const list = document.getElementById('urlList');
             const empty = document.getElementById('empty');
             list.innerHTML = '';
-            if (data.items.length === 0) {
+            const filtered = homeRawItems.filter(item => {
+                const m = parseItemMeta(item);
+                if (fSpider && m.spiderType !== fSpider) return false;
+                if (fSource && item.config_name !== fSource) return false;
+                if (fVideo === 'yes' && m.vodCount === 0) return false;
+                if (fVideo === 'no' && m.vodCount > 0) return false;
+                return true;
+            });
+            document.getElementById('filterCount').textContent = filtered.length + ' / ' + homeRawItems.length;
+            if (filtered.length === 0) {
                 empty.style.display = 'block';
-                empty.textContent = '暂无首页数据，App获取首页内容后会自动上传';
+                empty.textContent = homeRawItems.length === 0 ? '暂无首页数据，App获取首页内容后会自动上传' : '无匹配结果';
                 return;
             }
             empty.style.display = 'none';
-            data.items.forEach(item => {
-                let vodCount = 0;
-                let typeCount = 0;
-                try {
-                    const obj = JSON.parse(item.content);
-                    if (obj.list) vodCount = obj.list.length;
-                    if (obj.types || obj.class) typeCount = (obj.types || obj.class).length;
-                } catch(e) {}
+            filtered.forEach(item => {
+                const m = parseItemMeta(item);
                 const li = document.createElement('li');
                 li.className = 'url-item';
                 const configLabel = item.config_name ? '来源: ' + esc(item.config_name) : '';
                 li.innerHTML = `
                     <div class="url-info">
                         <div class="url-name">${esc(item.site_name || item.site_key)}</div>
-                        <div class="home-meta">${esc(item.site_key)}${configLabel ? ' · ' + configLabel : ''} · ${typeCount} 分类 · ${vodCount} 视频 · ${formatTime(item.updated_at)}</div>
+                        <div class="home-meta">${esc(item.site_key)}${configLabel ? ' · ' + configLabel : ''} · ${m.typeCount} 分类 · ${m.vodCount} 视频 · ${formatTime(item.updated_at)}</div>
                     </div>
                     <div class="url-actions">
+                        <button class="btn btn-sm btn-copy" onclick="copyHomeContent('${esc(item.site_key)}', this)">Copy</button>
                         <button class="btn btn-sm btn-edit" onclick="viewHomeContent('${esc(item.site_key)}')">查看</button>
                         <button class="btn btn-sm btn-delete" onclick="removeHomeContent('${esc(item.site_key)}')">Del</button>
                     </div>
@@ -169,6 +639,10 @@
         }
 
         async function viewHomeContent(siteKey) {
+            const modal = document.getElementById('homeModal');
+            const viewer = document.getElementById('homeJsonViewer');
+            viewer.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            modal.classList.add('show');
             const resp = await fetch(`api/home-contents/${encodeURIComponent(siteKey)}`);
             const data = await resp.json();
             let formatted = '';
@@ -179,8 +653,29 @@
                 formatted = data.content;
             }
             document.getElementById('homeModalTitle').textContent = data.site_name || data.site_key;
-            document.getElementById('homeJsonViewer').textContent = formatted;
-            document.getElementById('homeModal').classList.add('show');
+            viewer.textContent = formatted;
+        }
+
+        function fallbackCopy(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+
+        async function copyHomeContent(siteKey, btn) {
+            const item = homeRawItems.find(i => i.site_key === siteKey);
+            if (!item) return;
+            let text = item.content;
+            try { text = JSON.stringify(JSON.parse(item.content), null, 2); } catch(e) {}
+            await (navigator.clipboard ? navigator.clipboard.writeText(text) : fallbackCopy(text));
+            const orig = btn.textContent;
+            btn.textContent = 'Done';
+            btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
         }
 
         function closeHomeModal() {
@@ -189,8 +684,11 @@
 
         async function removeHomeContent(siteKey) {
             if (!confirm('Delete this home content?')) return;
-            await fetch(`api/home-contents/${encodeURIComponent(siteKey)}`, {method: 'DELETE'});
-            loadHomeContents();
+            setLoadingBtns(true);
+            try {
+                await fetch(`api/home-contents/${encodeURIComponent(siteKey)}`, {method: 'DELETE'});
+                await loadHomeContents();
+            } finally { setLoadingBtns(false); }
         }
 
         function formatTime(iso) {
@@ -205,14 +703,17 @@
             const name = document.getElementById('inputName').value.trim();
             const url = document.getElementById('inputUrl').value.trim();
             if (!url) return;
-            await fetch('api/urls', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type: currentType, name, url})
-            });
-            document.getElementById('inputName').value = '';
-            document.getElementById('inputUrl').value = '';
-            loadUrls();
+            setLoadingBtns(true);
+            try {
+                await fetch('api/urls', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({type: currentType, name, url})
+                });
+                document.getElementById('inputName').value = '';
+                document.getElementById('inputUrl').value = '';
+                await loadUrls();
+            } finally { setLoadingBtns(false); }
         }
 
         function openEdit(id, name, url) {
@@ -231,28 +732,37 @@
             const name = document.getElementById('editName').value.trim();
             const url = document.getElementById('editUrl').value.trim();
             if (!url) return;
-            await fetch(`api/urls/${editingId}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name, url})
-            });
-            closeModal();
-            loadUrls();
+            setLoadingBtns(true);
+            try {
+                await fetch(`api/urls/${editingId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, url})
+                });
+                closeModal();
+                await loadUrls();
+            } finally { setLoadingBtns(false); }
         }
 
         async function toggleUrl(id, enabled) {
-            await fetch(`api/urls/${id}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({enabled})
-            });
-            loadUrls();
+            setLoadingBtns(true);
+            try {
+                await fetch(`api/urls/${id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled})
+                });
+                await loadUrls();
+            } finally { setLoadingBtns(false); }
         }
 
         async function removeUrl(id) {
             if (!confirm('Delete this URL?')) return;
-            await fetch(`api/urls/${id}`, {method: 'DELETE'});
-            loadUrls();
+            setLoadingBtns(true);
+            try {
+                await fetch(`api/urls/${id}`, {method: 'DELETE'});
+                await loadUrls();
+            } finally { setLoadingBtns(false); }
         }
 
         function esc(s) {
