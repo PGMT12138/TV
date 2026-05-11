@@ -167,29 +167,39 @@ async def proxy_video(request: Request, url: str, headers: str = "{}"):
     elif not content_type:
         content_type = "video/mp4"
 
-    async def stream():
-        try:
-            if is_m3u8 and resp.status_code == 200:
-                body = await resp.aread()
-                rewritten = _rewrite_m3u8(url, headers, body)
-                yield rewritten
-            else:
-                async for chunk in resp.aiter_bytes(chunk_size=65536):
-                    yield chunk
-        finally:
-            await resp.aclose()
-            await client.aclose()
-
     headers_out = {
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "no-cache",
-        "Content-Type": content_type,
     }
+    if is_m3u8 and resp.status_code == 200:
+        body = await resp.aread()
+        await resp.aclose()
+        await client.aclose()
+        if not body.lstrip().startswith(b"#EXTM3U"):
+            return StreamingResponse(
+                iter([json.dumps({"error": "link_expired", "message": "链接已过期，请从App重新播放获取新链接"}).encode()]),
+                status_code=410,
+                headers={**headers_out, "Content-Type": "application/json"},
+            )
+        rewritten = _rewrite_m3u8(url, headers, body)
+        return StreamingResponse(
+            iter([rewritten]),
+            status_code=200,
+            headers={**headers_out, "Content-Type": content_type},
+        )
+
+    headers_out["Content-Type"] = content_type
     for h in ("Content-Length", "Content-Range", "Accept-Ranges"):
         if h in resp.headers:
             headers_out[h] = resp.headers[h]
-    if is_m3u8 and resp.status_code == 200:
-        headers_out.pop("Content-Length", None)
+
+    async def stream():
+        try:
+            async for chunk in resp.aiter_bytes(chunk_size=65536):
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
     return StreamingResponse(stream(), status_code=resp.status_code, headers=headers_out)
 

@@ -6,381 +6,276 @@
     <title>TV Config Management</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
         :root {
-            --cyan: #00f0ff;
-            --cyan-dim: #00889a;
-            --magenta: #ff0066;
-            --bg-deep: #05060f;
-            --bg-card: rgba(8, 18, 40, 0.85);
-            --bg-input: rgba(0, 240, 255, 0.04);
-            --border: rgba(0, 240, 255, 0.12);
-            --border-focus: rgba(0, 240, 255, 0.5);
-            --text: #e4ecf5;
-            --text-dim: #7a96b0;
-            --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.15);
-            --glow-magenta: 0 0 20px rgba(255, 0, 102, 0.15);
+            --glass-bg: rgba(255, 255, 255, 0.52);
+            --glass-bg-heavy: rgba(255, 255, 255, 0.72);
+            --glass-border: rgba(255, 255, 255, 0.6);
+            --glass-shadow: 0 8px 32px rgba(100, 80, 160, 0.08);
+            --glass-shadow-lg: 0 12px 48px rgba(100, 80, 160, 0.12);
+            --glass-blur: blur(20px);
+            --glass-blur-heavy: blur(28px);
+            --accent: #6c5ce7;
+            --accent-light: #a29bfe;
+            --accent-2: #0984e3;
+            --accent-gradient: linear-gradient(135deg, #6c5ce7, #0984e3);
+            --text: #1e293b;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --danger: #ef4444;
+            --danger-light: rgba(239, 68, 68, 0.1);
+            --success: #10b981;
+            --success-light: rgba(16, 185, 129, 0.1);
+            --radius: 14px;
+            --radius-sm: 10px;
+            --radius-xs: 7px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: 'Rajdhani', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg-deep);
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #eef0f7;
             color: var(--text);
             min-height: 100vh;
             overflow-x: hidden;
         }
 
-        body::before {
-            content: '';
+        /* Animated background blobs */
+        .bg-blobs {
             position: fixed;
             inset: 0;
-            background:
-                radial-gradient(ellipse at 20% 0%, rgba(0, 240, 255, 0.06) 0%, transparent 60%),
-                radial-gradient(ellipse at 80% 100%, rgba(255, 0, 102, 0.04) 0%, transparent 60%);
-            pointer-events: none;
             z-index: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.45;
+            animation: blobFloat 20s ease-in-out infinite alternate;
+        }
+        .blob-1 { width: 500px; height: 500px; background: #ddd6fe; top: -10%; left: -5%; animation-delay: 0s; }
+        .blob-2 { width: 400px; height: 400px; background: #bae6fd; top: 40%; right: -8%; animation-delay: -7s; }
+        .blob-3 { width: 350px; height: 350px; background: #fecdd3; bottom: -5%; left: 30%; animation-delay: -14s; }
+        .blob-4 { width: 280px; height: 280px; background: #bbf7d0; top: 20%; left: 50%; animation-delay: -3s; }
+
+        @keyframes blobFloat {
+            0% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -40px) scale(1.05); }
+            66% { transform: translate(-20px, 20px) scale(0.95); }
+            100% { transform: translate(15px, -15px) scale(1.02); }
         }
 
+        /* Main container */
         .container {
-            max-width: 860px;
-            margin: 0 auto;
-            padding: 24px 20px;
             position: relative;
             z-index: 1;
+            padding: 24px 32px 100px;
         }
 
         /* Header */
         .header {
-            text-align: center;
-            margin-bottom: 32px;
-            padding: 28px 0 24px;
-            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 28px;
         }
-
-        .header::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 60%;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, var(--cyan), transparent);
-            opacity: 0.4;
+        .header-left h1 {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
-
-        h1 {
-            font-family: 'Orbitron', monospace;
-            font-size: 26px;
-            font-weight: 700;
-            letter-spacing: 6px;
-            text-transform: uppercase;
-            color: var(--cyan);
-            text-shadow: 0 0 30px rgba(0, 240, 255, 0.3);
-        }
-
         .header-sub {
             font-size: 12px;
-            color: var(--text-dim);
-            letter-spacing: 4px;
-            margin-top: 6px;
-            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 500;
+            margin-top: 2px;
+            letter-spacing: 0.5px;
         }
 
-        /* Tabs */
+        /* Tabs - pill style */
         .tabs {
-            display: flex;
+            display: inline-flex;
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 4px;
             gap: 2px;
-            margin-bottom: 20px;
-            background: rgba(0, 240, 255, 0.03);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 3px;
+            box-shadow: var(--glass-shadow);
         }
-
         .tab {
-            flex: 1;
-            padding: 11px;
-            text-align: center;
-            cursor: pointer;
-            color: var(--text-dim);
-            font-size: 15px;
+            padding: 9px 20px;
+            border-radius: 9px;
+            font-size: 13px;
             font-weight: 600;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            transition: all 0.3s;
-            border-radius: 2px;
-            position: relative;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.25s ease;
+            white-space: nowrap;
+            border: none;
+            background: transparent;
         }
-
         .tab:hover { color: var(--text); }
-
         .tab.active {
-            color: var(--cyan);
-            background: rgba(0, 240, 255, 0.08);
-            box-shadow: inset 0 0 20px rgba(0, 240, 255, 0.05);
+            background: var(--accent-gradient);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(108, 92, 231, 0.3);
         }
 
-        .tab.active::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 20%;
-            width: 60%;
-            height: 1px;
-            background: var(--cyan);
-            box-shadow: 0 0 8px var(--cyan);
-        }
-
-        /* Add Bar */
+        /* Add bar */
         .add-bar {
             display: flex;
-            gap: 8px;
-            margin-bottom: 18px;
+            gap: 10px;
+            margin-bottom: 20px;
         }
-
         .add-bar input {
             flex: 1;
-            padding: 11px 14px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--bg-input);
+            padding: 11px 16px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
             color: var(--text);
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 15px;
-            transition: all 0.3s;
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
         }
-
-        .add-bar input::placeholder { color: var(--text-dim); letter-spacing: 1px; }
-
+        .add-bar input::placeholder { color: var(--text-muted); }
         .add-bar input:focus {
             outline: none;
-            border-color: var(--border-focus);
-            box-shadow: var(--glow-cyan);
-            background: rgba(0, 240, 255, 0.06);
+            border-color: var(--accent-light);
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.04), 0 0 0 3px rgba(108, 92, 231, 0.12);
+            background: rgba(255,255,255,0.8);
         }
 
         /* Buttons */
         .btn {
-            padding: 10px 20px;
-            border: 1px solid transparent;
-            border-radius: 3px;
+            padding: 10px 22px;
+            border: none;
+            border-radius: var(--radius-sm);
             cursor: pointer;
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 14px;
+            font-family: inherit;
+            font-size: 13px;
             font-weight: 600;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            transition: all 0.25s;
-            position: relative;
+            transition: all 0.2s ease;
+            white-space: nowrap;
         }
-
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
         .btn-primary {
-            background: linear-gradient(135deg, rgba(0, 240, 255, 0.15), rgba(0, 240, 255, 0.05));
-            border-color: var(--cyan-dim);
-            color: var(--cyan);
+            background: var(--accent-gradient);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(108, 92, 231, 0.25);
         }
         .btn-primary:hover {
-            background: linear-gradient(135deg, rgba(0, 240, 255, 0.25), rgba(0, 240, 255, 0.1));
-            box-shadow: var(--glow-cyan);
+            box-shadow: 0 6px 20px rgba(108, 92, 231, 0.35);
+            transform: translateY(-1px);
         }
 
-        .btn-sm { padding: 6px 14px; font-size: 12px; }
+        .btn-sm { padding: 6px 14px; font-size: 12px; border-radius: var(--radius-xs); }
 
         .btn-edit {
-            background: rgba(0, 240, 255, 0.06);
-            border-color: rgba(0, 240, 255, 0.2);
-            color: var(--cyan-dim);
+            background: rgba(108, 92, 231, 0.08);
+            color: var(--accent);
         }
-        .btn-edit:hover { color: var(--cyan); box-shadow: var(--glow-cyan); }
+        .btn-edit:hover { background: rgba(108, 92, 231, 0.15); }
 
         .btn-copy {
-            background: rgba(0, 180, 100, 0.06);
-            border-color: rgba(0, 180, 100, 0.2);
-            color: #3a8a60;
+            background: var(--success-light);
+            color: var(--success);
         }
-        .btn-copy:hover { color: #00e676; box-shadow: 0 0 20px rgba(0, 230, 118, 0.15); }
-        .btn-copy.copied { color: #00e676; border-color: rgba(0, 230, 118, 0.4); }
+        .btn-copy:hover { background: rgba(16, 185, 129, 0.18); }
+        .btn-copy.copied { background: rgba(16, 185, 129, 0.25); }
 
         .btn-delete {
-            background: rgba(255, 0, 102, 0.06);
-            border-color: rgba(255, 0, 102, 0.2);
-            color: #a03050;
+            background: var(--danger-light);
+            color: var(--danger);
         }
-        .btn-delete:hover { color: var(--magenta); box-shadow: var(--glow-magenta); }
+        .btn-delete:hover { background: rgba(239, 68, 68, 0.18); }
 
         .btn-toggle {
-            background: transparent;
-            border-color: rgba(0, 240, 255, 0.15);
-            color: var(--text-dim);
+            background: rgba(0,0,0,0.04);
+            color: var(--text-muted);
         }
         .btn-toggle.active {
-            background: rgba(0, 240, 255, 0.1);
-            border-color: var(--cyan-dim);
-            color: var(--cyan);
-            box-shadow: inset 0 0 12px rgba(0, 240, 255, 0.05);
+            background: var(--success-light);
+            color: var(--success);
+            font-weight: 700;
         }
 
         .btn-cancel {
-            background: transparent;
-            border-color: rgba(255, 255, 255, 0.1);
-            color: var(--text-dim);
+            background: rgba(0,0,0,0.05);
+            color: var(--text-secondary);
         }
-        .btn-cancel:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+        .btn-cancel:hover { background: rgba(0,0,0,0.1); }
 
-        /* List */
-        .url-list { list-style: none; }
+        /* URL List */
+        .url-list {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 8px;
+        }
 
         .url-item {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
             padding: 14px 16px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            margin-bottom: 6px;
-            transition: all 0.3s;
-            position: relative;
-            overflow: hidden;
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            transition: all 0.2s ease;
+            box-shadow: var(--glass-shadow);
         }
-
-        .url-item::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            width: 2px;
-            background: var(--cyan);
-            opacity: 0;
-            transition: opacity 0.3s;
+        .url-item:hover {
+            border-color: rgba(108, 92, 231, 0.25);
+            box-shadow: var(--glass-shadow-lg);
+            transform: translateY(-1px);
         }
-
-        .url-item:hover { border-color: rgba(0, 240, 255, 0.2); }
-        .url-item:hover::before { opacity: 0.6; }
-
-        .url-item.disabled { opacity: 0.35; }
-        .url-item.disabled::before { background: var(--text-dim); }
+        .url-item.disabled { opacity: 0.4; }
 
         .url-info { flex: 1; min-width: 0; }
 
         .url-name {
-            font-weight: 600;
-            font-size: 15px;
-            color: #fff;
-            letter-spacing: 0.5px;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text);
         }
-
         .url-addr {
-            font-size: 13px;
-            color: #a0b8cc;
+            font-size: 12px;
+            color: var(--text-muted);
             word-break: break-all;
             margin-top: 3px;
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', 'Fira Code', monospace;
         }
-
         .url-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
         .home-meta {
             font-size: 12px;
-            color: var(--text-dim);
+            color: var(--text-muted);
             margin-top: 3px;
-            letter-spacing: 0.3px;
         }
 
         .empty {
             text-align: center;
-            color: var(--text-dim);
-            padding: 50px 20px;
+            color: var(--text-muted);
+            padding: 60px 20px;
             font-size: 14px;
-            letter-spacing: 2px;
-        }
-
-        /* Modal */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(2, 4, 12, 0.85);
-            backdrop-filter: blur(6px);
-            z-index: 100;
-            justify-content: center;
-            align-items: center;
-        }
-        .modal-overlay.show { display: flex; }
-
-        .modal {
-            background: linear-gradient(160deg, rgba(8, 18, 40, 0.97), rgba(5, 6, 15, 0.98));
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 28px;
-            width: 90%;
-            max-width: 700px;
-            max-height: 85vh;
-            overflow: auto;
-            box-shadow: 0 0 60px rgba(0, 240, 255, 0.05), inset 0 1px 0 rgba(0, 240, 255, 0.05);
-        }
-
-        .modal h3 {
-            margin-bottom: 20px;
-            font-family: 'Orbitron', monospace;
-            font-size: 16px;
-            color: var(--cyan);
-            letter-spacing: 3px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .modal label {
-            display: block;
-            margin-bottom: 5px;
-            font-size: 13px;
-            color: var(--text-dim);
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }
-
-        .modal input {
-            width: 100%;
-            padding: 11px 14px;
-            margin-bottom: 14px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--bg-input);
-            color: var(--text);
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 15px;
-            transition: all 0.3s;
-        }
-
-        .modal input:focus {
-            outline: none;
-            border-color: var(--border-focus);
-            box-shadow: var(--glow-cyan);
-        }
-
-        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
-
-        .json-viewer {
-            background: rgba(0, 240, 255, 0.03);
-            border: 1px solid var(--border);
-            padding: 16px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.6;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-height: 55vh;
-            overflow: auto;
-            color: var(--text);
-            margin-bottom: 14px;
+            font-weight: 500;
         }
 
         /* Filter bar */
@@ -393,82 +288,122 @@
         }
         .filter-bar.show { display: flex; }
         .filter-bar select {
-            padding: 8px 12px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--bg-input);
+            padding: 9px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
             color: var(--text);
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 14px;
+            font-family: inherit;
+            font-size: 13px;
             cursor: pointer;
-            transition: all 0.3s;
-            min-width: 120px;
+            transition: all 0.2s ease;
+            box-shadow: var(--glass-shadow);
+            min-width: 110px;
         }
         .filter-bar select:focus {
             outline: none;
-            border-color: var(--border-focus);
-            box-shadow: var(--glow-cyan);
+            border-color: var(--accent-light);
+            box-shadow: var(--glass-shadow), 0 0 0 3px rgba(108, 92, 231, 0.1);
         }
-        .filter-bar select option { background: #0a0e1a; color: var(--text); }
+        .filter-bar select option { background: #fff; color: var(--text); }
         .filter-count {
-            font-size: 13px;
-            color: var(--text-dim);
-            letter-spacing: 1px;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
             margin-left: auto;
         }
 
-        /* Loading */
-        .loading { display: flex; justify-content: center; align-items: center; padding: 50px; }
-        .spinner {
-            width: 36px;
-            height: 36px;
-            border: 2px solid rgba(0, 240, 255, 0.1);
-            border-top-color: var(--cyan);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+        /* Batch actions for home content */
+        .batch-bar {
+            display: none;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .batch-bar.show { display: flex; }
+        .batch-bar label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+        }
+        .batch-bar input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .batch-selected {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .btn-batch-del {
+            background: var(--danger-light);
+            color: var(--danger);
+        }
+        .btn-batch-del:hover { background: rgba(239, 68, 68, 0.18); }
+        .btn-batch-del:disabled { opacity: 0.35; }
 
-        /* Scrollbar */
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.15); border-radius: 2px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(0, 240, 255, 0.3); }
+        .url-item .item-check {
+            flex-shrink: 0;
+        }
+        .url-item .item-check input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .url-item.selected {
+            border-color: rgba(108, 92, 231, 0.4);
+            background: rgba(108, 92, 231, 0.06);
+        }
 
         /* Video grid */
-        .video-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+        .video-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
         .video-grid.show { display: grid; }
         .video-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 4px;
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
             overflow: hidden;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: all 0.25s ease;
             position: relative;
+            box-shadow: var(--glass-shadow);
         }
-        .video-card:hover { border-color: rgba(0, 240, 255, 0.3); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0, 240, 255, 0.08); }
+        .video-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--glass-shadow-lg);
+            border-color: rgba(108, 92, 231, 0.25);
+        }
         .video-card-img {
             width: 100%;
             aspect-ratio: 3/4;
             object-fit: cover;
-            background: rgba(0, 240, 255, 0.03);
+            background: linear-gradient(135deg, rgba(238,240,247,0.6), rgba(221,214,254,0.4));
             display: block;
         }
         .video-card-img[src=""] { display: none; }
-        .video-card-body { padding: 10px 12px; }
+        .video-card-body { padding: 12px 14px; }
         .video-card-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #fff;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .video-card-meta {
             font-size: 11px;
-            color: var(--text-dim);
+            color: var(--text-muted);
             margin-top: 4px;
             white-space: nowrap;
             overflow: hidden;
@@ -476,37 +411,27 @@
         }
         .video-card-del {
             position: absolute;
-            top: 6px;
-            right: 6px;
-            background: rgba(0,0,0,0.7);
+            top: 8px;
+            right: 8px;
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(8px);
             border: none;
-            color: #a03050;
-            width: 24px;
-            height: 24px;
-            border-radius: 3px;
+            color: var(--danger);
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
             cursor: pointer;
-            font-size: 12px;
+            font-size: 14px;
             display: none;
             align-items: center;
             justify-content: center;
+            transition: all 0.15s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .video-card:hover .video-card-del { display: flex; }
-        .video-card-del:hover { color: var(--magenta); }
+        .video-card-del:hover { background: #fff; transform: scale(1.1); }
 
-        /* Player modal */
-        .player-modal { max-width: 900px; width: 95%; }
-        .player-wrap {
-            width: 100%;
-            background: #000;
-            border-radius: 3px;
-            overflow: hidden;
-            margin-bottom: 16px;
-        }
-        .player-wrap video { width: 100%; max-height: 60vh; display: block; }
-        .player-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
-        .player-info dt { color: var(--text-dim); text-align: right; white-space: nowrap; }
-        .player-info dd { color: var(--text); margin: 0; }
-
+        /* Video filter bar */
         .video-filter-bar {
             display: none;
             gap: 8px;
@@ -516,60 +441,281 @@
         .video-filter-bar.show { display: flex; }
         .video-filter-bar input {
             flex: 1;
-            padding: 8px 12px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--bg-input);
+            padding: 9px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
             color: var(--text);
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 14px;
+            font-family: inherit;
+            font-size: 13px;
+            box-shadow: var(--glass-shadow);
         }
-        .video-filter-bar input::placeholder { color: var(--text-dim); }
-        .video-filter-bar input:focus { outline: none; border-color: var(--border-focus); }
+        .video-filter-bar input::placeholder { color: var(--text-muted); }
+        .video-filter-bar input:focus {
+            outline: none;
+            border-color: var(--accent-light);
+            box-shadow: var(--glass-shadow), 0 0 0 3px rgba(108, 92, 231, 0.1);
+        }
         .video-filter-bar select {
-            padding: 8px 12px;
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            background: var(--bg-input);
+            padding: 9px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
             color: var(--text);
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 14px;
+            font-family: inherit;
+            font-size: 13px;
+            box-shadow: var(--glass-shadow);
         }
-        .video-filter-bar select option { background: #0a0e1a; }
+        .video-filter-bar select option { background: #fff; }
 
-        /* Scanline overlay */
-        body::after {
-            content: '';
+        /* Modal */
+        .modal-overlay {
+            display: none;
             position: fixed;
             inset: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 240, 255, 0.008) 2px,
-                rgba(0, 240, 255, 0.008) 4px
-            );
-            pointer-events: none;
-            z-index: 9999;
+            background: rgba(30, 41, 59, 0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
         }
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: var(--glass-bg-heavy);
+            backdrop-filter: var(--glass-blur-heavy);
+            -webkit-backdrop-filter: var(--glass-blur-heavy);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 32px;
+            width: 100%;
+            max-width: 560px;
+            max-height: 85vh;
+            overflow: auto;
+            box-shadow: 0 24px 64px rgba(100, 80, 160, 0.15), 0 0 0 1px rgba(255,255,255,0.5) inset;
+        }
+        .modal h3 {
+            margin-bottom: 24px;
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--text);
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+        }
+        .modal label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .modal input {
+            width: 100%;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            background: rgba(255,255,255,0.6);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .modal input:focus {
+            outline: none;
+            border-color: var(--accent-light);
+            box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+        }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+
+        .json-viewer {
+            background: rgba(255,255,255,0.5);
+            border: 1px solid var(--glass-border);
+            padding: 18px;
+            border-radius: var(--radius-sm);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 55vh;
+            overflow: auto;
+            color: var(--text);
+            margin-bottom: 16px;
+        }
+
+        /* Player modal */
+        .player-modal { max-width: 900px; }
+        .player-wrap {
+            width: 100%;
+            background: #000;
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        .player-wrap video { width: 100%; max-height: 60vh; display: block; }
+        .player-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 13px; }
+        .player-info dt { color: var(--text-muted); text-align: right; white-space: nowrap; font-weight: 500; }
+        .player-info dd { color: var(--text); margin: 0; }
+
+        /* Loading */
+        .loading { display: flex; justify-content: center; align-items: center; padding: 50px; }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(108, 92, 231, 0.12);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(108, 92, 231, 0.15); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(108, 92, 231, 0.3); }
+
+        /* Player error overlay */
+        .player-error {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ef4444;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0,0,0,0.75);
+            backdrop-filter: blur(4px);
+            z-index: 2;
+        }
+
+        /* ===== RESPONSIVE: Mobile ===== */
+        @media (max-width: 767px) {
+            .container {
+                padding: 16px 16px 80px;
+            }
+
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 14px;
+                margin-bottom: 20px;
+            }
+
+            /* Hide inline tabs, show bottom bar */
+            .tabs { display: none; }
+
+            .bottom-tabs {
+                display: flex !important;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                z-index: 90;
+                background: var(--glass-bg-heavy);
+                backdrop-filter: var(--glass-blur-heavy);
+                -webkit-backdrop-filter: var(--glass-blur-heavy);
+                border-top: 1px solid var(--glass-border);
+                padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+                box-shadow: 0 -4px 24px rgba(100, 80, 160, 0.1);
+            }
+            .bottom-tab {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 3px;
+                padding: 6px 4px;
+                border: none;
+                background: transparent;
+                border-radius: var(--radius-xs);
+                cursor: pointer;
+                color: var(--text-muted);
+                font-size: 10px;
+                font-weight: 600;
+                font-family: inherit;
+                transition: all 0.2s ease;
+            }
+            .bottom-tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+            .bottom-tab.active {
+                color: var(--accent);
+                background: rgba(108, 92, 231, 0.08);
+            }
+
+            .add-bar { flex-direction: column; gap: 8px; }
+            .add-bar .btn { width: 100%; }
+
+            .url-item {
+                padding: 12px 14px;
+                gap: 10px;
+            }
+            .url-actions {
+                flex-shrink: 0;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            .btn-sm { padding: 5px 10px; font-size: 11px; }
+
+            .video-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+
+            .video-filter-bar { flex-direction: column; }
+            .video-filter-bar select { width: 100%; }
+
+            .filter-bar select { min-width: 0; flex: 1; }
+
+            .modal {
+                max-width: none;
+                border-radius: 16px;
+                padding: 20px;
+            }
+            .player-modal {
+                max-height: 90vh;
+            }
+            .player-wrap video { max-height: 40vh; }
+        }
+
+        /* Bottom tabs hidden on desktop */
+        .bottom-tabs { display: none; }
     </style>
 </head>
 <body>
+    <div class="bg-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+        <div class="blob blob-4"></div>
+    </div>
+
     <div class="container">
         <div class="header">
-            <h1>TV CONFIG</h1>
-            <div class="header-sub">Management System</div>
+            <div class="header-left">
+                <h1>TV Config</h1>
+                <div class="header-sub">Management System</div>
+            </div>
+            <div class="tabs" id="desktopTabs">
+                <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
+                <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
+                <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
+                <div class="tab" data-type="3" onclick="switchTab(3)">播放记录</div>
+            </div>
         </div>
-        <div class="tabs">
-            <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
-            <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
-            <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
-            <div class="tab" data-type="3" onclick="switchTab(3)">播放记录</div>
-        </div>
+
         <div class="add-bar" id="addBar">
-            <input type="text" id="inputName" placeholder="NAME (OPTIONAL)">
-            <input type="text" id="inputUrl" placeholder="CONFIG URL">
-            <button class="btn btn-primary" onclick="addUrl()">ADD</button>
+            <input type="text" id="inputName" placeholder="名称（可选）">
+            <input type="text" id="inputUrl" placeholder="配置地址">
+            <button class="btn btn-primary" onclick="addUrl()">添加</button>
         </div>
         <div class="filter-bar" id="filterBar">
             <select id="filterSpider" onchange="applyHomeFilter()"><option value="">全部类型</option></select>
@@ -581,46 +727,71 @@
             </select>
             <span class="filter-count" id="filterCount"></span>
         </div>
+        <div class="batch-bar" id="batchBar">
+            <label><input type="checkbox" id="selectAll" onchange="toggleSelectAll()">全选</label>
+            <span class="batch-selected" id="batchCount"></span>
+            <button class="btn btn-sm btn-batch-del" id="batchDelBtn" onclick="batchDeleteHome()" disabled>批量删除</button>
+        </div>
         <ul class="url-list" id="urlList"></ul>
         <div class="video-filter-bar" id="videoFilterBar">
             <input type="text" id="videoSearch" placeholder="搜索影片名称..." oninput="applyVideoFilter()">
             <select id="videoSiteFilter" onchange="applyVideoFilter()"><option value="">全部来源</option></select>
         </div>
         <div class="video-grid" id="videoGrid"></div>
-        <div class="empty" id="empty" style="display:none">NO DATA</div>
+        <div class="empty" id="empty" style="display:none">暂无数据</div>
+    </div>
+
+    <!-- Bottom tab bar (mobile) -->
+    <div class="bottom-tabs" id="bottomTabs">
+        <button class="bottom-tab active" data-type="0" onclick="switchTab(0)">
+            <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            VOD
+        </button>
+        <button class="bottom-tab" data-type="1" onclick="switchTab(1)">
+            <svg viewBox="0 0 24 24"><polygon points="2,3 22,12 2,21"/></svg>
+            Live
+        </button>
+        <button class="bottom-tab" data-type="2" onclick="switchTab(2)">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            首页
+        </button>
+        <button class="bottom-tab" data-type="3" onclick="switchTab(3)">
+            <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/><rect x="1" y="1" width="4" height="22" rx="1"/></svg>
+            记录
+        </button>
     </div>
 
     <div class="modal-overlay" id="editModal">
         <div class="modal">
-            <h3>EDIT URL</h3>
-            <label>Name</label>
+            <h3>编辑配置</h3>
+            <label>名称</label>
             <input type="text" id="editName">
-            <label>URL</label>
+            <label>地址</label>
             <input type="text" id="editUrl">
             <div class="modal-actions">
-                <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveEdit()">Save</button>
+                <button class="btn btn-cancel" onclick="closeModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveEdit()">保存</button>
             </div>
         </div>
     </div>
 
     <div class="modal-overlay" id="homeModal">
         <div class="modal">
-            <h3 id="homeModalTitle">HOME CONTENT</h3>
+            <h3 id="homeModalTitle">首页数据</h3>
             <div class="json-viewer" id="homeJsonViewer"></div>
             <div class="modal-actions">
-                <button class="btn btn-cancel" onclick="closeHomeModal()">Close</button>
+                <button class="btn btn-cancel" onclick="closeHomeModal()">关闭</button>
             </div>
         </div>
     </div>
 
     <div class="modal-overlay" id="playerModal">
         <div class="modal player-modal">
-            <h3 id="playerTitle">PLAYER</h3>
-            <div class="player-wrap"><video id="videoPlayer" controls autoplay></video></div>
+            <h3 id="playerTitle">播放器</h3>
+            <div class="player-wrap" style="position:relative"><video id="videoPlayer" controls autoplay></video></div>
             <dl class="player-info" id="playerInfo"></dl>
             <div class="modal-actions" style="margin-top:16px">
-                <button class="btn btn-cancel" onclick="closePlayer()">Close</button>
+                <button class="btn btn-cancel" onclick="closePlayer()">关闭</button>
             </div>
         </div>
     </div>
@@ -641,6 +812,7 @@
         function switchTab(type) {
             currentType = type;
             document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.type) === type));
+            document.querySelectorAll('.bottom-tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.type) === type));
             const addBar = document.getElementById('addBar');
             const filterBar = document.getElementById('filterBar');
             const videoBar = document.getElementById('videoFilterBar');
@@ -648,6 +820,7 @@
             const urlList = document.getElementById('urlList');
             addBar.style.display = type >= 2 ? 'none' : 'flex';
             filterBar.classList.toggle('show', type === 2);
+            document.getElementById('batchBar').classList.toggle('show', type === 2);
             videoBar.classList.toggle('show', type === 3);
             urlList.style.display = type === 3 ? 'none' : '';
             videoGrid.classList.toggle('show', type === 3);
@@ -665,7 +838,7 @@
             list.innerHTML = '';
             if (data.urls.length === 0) {
                 empty.style.display = 'block';
-                empty.textContent = 'NO URLS CONFIGURED';
+                empty.textContent = '暂无配置，点击上方添加';
                 return;
             }
             empty.style.display = 'none';
@@ -674,13 +847,13 @@
                 li.className = 'url-item' + (item.enabled ? '' : ' disabled');
                 li.innerHTML = `
                     <div class="url-info">
-                        <div class="url-name">${esc(item.name || 'Unnamed')}</div>
+                        <div class="url-name">${esc(item.name || '未命名')}</div>
                         <div class="url-addr">${esc(item.url)}</div>
                     </div>
                     <div class="url-actions">
                         <button class="btn btn-sm btn-toggle ${item.enabled ? 'active' : ''}" onclick="toggleUrl(${item.id}, ${!item.enabled})">${item.enabled ? 'ON' : 'OFF'}</button>
-                        <button class="btn btn-sm btn-edit" onclick="openEdit(${item.id}, '${esc(item.name)}', '${esc(item.url)}')">Edit</button>
-                        <button class="btn btn-sm btn-delete" onclick="removeUrl(${item.id})">Del</button>
+                        <button class="btn btn-sm btn-edit" onclick="openEdit(${item.id}, '${esc(item.name)}', '${esc(item.url)}')">编辑</button>
+                        <button class="btn btn-sm btn-delete" onclick="removeUrl(${item.id})">删除</button>
                     </div>
                 `;
                 list.appendChild(li);
@@ -693,7 +866,7 @@
             showLoading();
             const resp = await fetch('api/home-contents');
             const data = await resp.json();
-            homeRawItems = data.items.sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+            homeRawItems = data.items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
             buildFilterOptions();
             applyHomeFilter();
         }
@@ -748,20 +921,64 @@
                 const m = parseItemMeta(item);
                 const li = document.createElement('li');
                 li.className = 'url-item';
+                li.dataset.siteKey = item.site_key;
                 const configLabel = item.config_name ? '来源: ' + esc(item.config_name) : '';
                 li.innerHTML = `
+                    <div class="item-check"><input type="checkbox" data-key="${esc(item.site_key)}" onchange="updateBatchState()"></div>
                     <div class="url-info">
                         <div class="url-name">${esc(item.site_name || item.site_key)}</div>
                         <div class="home-meta">${esc(item.site_key)}${configLabel ? ' · ' + configLabel : ''} · ${m.typeCount} 分类 · ${m.vodCount} 视频 · ${formatTime(item.updated_at)}</div>
                     </div>
                     <div class="url-actions">
-                        <button class="btn btn-sm btn-copy" onclick="copyHomeContent('${esc(item.site_key)}', this)">Copy</button>
+                        <button class="btn btn-sm btn-copy" onclick="copyHomeContent('${esc(item.site_key)}', this)">复制</button>
                         <button class="btn btn-sm btn-edit" onclick="viewHomeContent('${esc(item.site_key)}')">查看</button>
-                        <button class="btn btn-sm btn-delete" onclick="removeHomeContent('${esc(item.site_key)}')">Del</button>
+                        <button class="btn btn-sm btn-delete" onclick="removeHomeContent('${esc(item.site_key)}')">删除</button>
                     </div>
                 `;
                 list.appendChild(li);
             });
+            updateBatchState();
+        }
+
+        function getHomeCheckboxes() {
+            return document.querySelectorAll('.url-item input[data-key]');
+        }
+
+        function getCheckedKeys() {
+            return [...getHomeCheckboxes()].filter(cb => cb.checked).map(cb => cb.dataset.key);
+        }
+
+        function updateBatchState() {
+            const cbs = getHomeCheckboxes();
+            const checked = getCheckedKeys();
+            const selectAll = document.getElementById('selectAll');
+            selectAll.checked = cbs.length > 0 && checked.length === cbs.length;
+            selectAll.indeterminate = checked.length > 0 && checked.length < cbs.length;
+            document.getElementById('batchCount').textContent = checked.length ? `已选 ${checked.length} 项` : '';
+            document.getElementById('batchDelBtn').disabled = checked.length === 0;
+            document.querySelectorAll('.url-item').forEach(li => {
+                const cb = li.querySelector('input[data-key]');
+                li.classList.toggle('selected', cb && cb.checked);
+            });
+        }
+
+        function toggleSelectAll() {
+            const checked = document.getElementById('selectAll').checked;
+            getHomeCheckboxes().forEach(cb => { cb.checked = checked; });
+            updateBatchState();
+        }
+
+        async function batchDeleteHome() {
+            const keys = getCheckedKeys();
+            if (keys.length === 0) return;
+            if (!confirm(`确定删除选中的 ${keys.length} 条数据？`)) return;
+            setLoadingBtns(true);
+            try {
+                await Promise.all(keys.map(key =>
+                    fetch(`api/home-contents/${encodeURIComponent(key)}`, {method: 'DELETE'})
+                ));
+                await loadHomeContents();
+            } finally { setLoadingBtns(false); }
         }
 
         async function viewHomeContent(siteKey) {
@@ -799,7 +1016,7 @@
             try { text = JSON.stringify(JSON.parse(item.content), null, 2); } catch(e) {}
             await (navigator.clipboard ? navigator.clipboard.writeText(text) : fallbackCopy(text));
             const orig = btn.textContent;
-            btn.textContent = 'Done';
+            btn.textContent = '已复制';
             btn.classList.add('copied');
             setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
         }
@@ -809,7 +1026,7 @@
         }
 
         async function removeHomeContent(siteKey) {
-            if (!confirm('Delete this home content?')) return;
+            if (!confirm('确定删除此首页数据？')) return;
             setLoadingBtns(true);
             try {
                 await fetch(`api/home-contents/${encodeURIComponent(siteKey)}`, {method: 'DELETE'});
@@ -883,7 +1100,7 @@
         }
 
         async function removeUrl(id) {
-            if (!confirm('Delete this URL?')) return;
+            if (!confirm('确定删除此配置？')) return;
             setLoadingBtns(true);
             try {
                 await fetch(`api/urls/${id}`, {method: 'DELETE'});
@@ -954,12 +1171,10 @@
 
         function showPlayerError(msg) {
             const wrap = document.querySelector('.player-wrap');
-            let errEl = document.getElementById('playerError');
+            let errEl = wrap.querySelector('.player-error');
             if (!errEl) {
                 errEl = document.createElement('div');
-                errEl.id = 'playerError';
-                errEl.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ff4466;font-size:14px;text-align:center;padding:20px;background:rgba(0,0,0,0.8);z-index:2;';
-                wrap.style.position = 'relative';
+                errEl.className = 'player-error';
                 wrap.appendChild(errEl);
             }
             errEl.textContent = msg;
@@ -967,7 +1182,7 @@
         }
 
         function hidePlayerError() {
-            const errEl = document.getElementById('playerError');
+            const errEl = document.querySelector('.player-error');
             if (errEl) errEl.style.display = 'none';
         }
 
@@ -993,6 +1208,19 @@
             hidePlayerError();
 
             const proxyUrl = `api/videos/proxy?url=${encodeURIComponent(v.play_url)}&headers=${encodeURIComponent(v.headers)}`;
+
+            // Pre-check m3u8 links for expiration
+            if (/\.m3u8/i.test(v.play_url) || !/\.mp4|\.mkv|\.avi|\.flv/i.test(v.play_url)) {
+                modal.classList.add('show');
+                try {
+                    const check = await fetch(proxyUrl, {method: 'HEAD'});
+                    if (check.status === 410) {
+                        showPlayerError('链接已过期，请从 App 重新播放以获取新链接。');
+                        return;
+                    }
+                } catch(e) {}
+            }
+
             if (Hls.isSupported() && (/\.m3u8/i.test(v.play_url) || !/\.mp4|\.mkv|\.avi|\.flv/i.test(v.play_url))) {
                 hlsInstance = new Hls({
                     xhrSetup: function(xhr) {
@@ -1006,7 +1234,11 @@
                     if (data.fatal) {
                         switch(data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
-                                showPlayerError('网络错误：无法加载视频流。可能原因：链接已过期（token失效）、源站拒绝访问、或网络不通。');
+                                if (data.response && data.response.code === 410) {
+                                    showPlayerError('链接已过期，请从 App 重新播放以获取新链接。');
+                                } else {
+                                    showPlayerError('网络错误：无法加载视频流。可能原因：链接已过期（token失效）、源站拒绝访问、或网络不通。');
+                                }
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
                                 showPlayerError('媒体错误：视频格式不兼容，尝试恢复中...');
@@ -1038,7 +1270,7 @@
         }
 
         async function removeVideo(id) {
-            if (!confirm('Delete this video?')) return;
+            if (!confirm('确定删除此记录？')) return;
             await fetch(`api/videos/${id}`, {method: 'DELETE'});
             await loadVideos();
         }
