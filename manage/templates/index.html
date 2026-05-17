@@ -3,77 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TV Config Management</title>
+    <title>TV Management</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
         :root {
-            --glass-bg: rgba(255, 255, 255, 0.52);
-            --glass-bg-heavy: rgba(255, 255, 255, 0.72);
-            --glass-border: rgba(255, 255, 255, 0.6);
-            --glass-shadow: 0 8px 32px rgba(100, 80, 160, 0.08);
-            --glass-shadow-lg: 0 12px 48px rgba(100, 80, 160, 0.12);
-            --glass-blur: blur(20px);
-            --glass-blur-heavy: blur(28px);
-            --accent: #6c5ce7;
-            --accent-light: #a29bfe;
-            --accent-2: #0984e3;
-            --accent-gradient: linear-gradient(135deg, #6c5ce7, #0984e3);
-            --text: #1e293b;
-            --text-secondary: #475569;
-            --text-muted: #94a3b8;
-            --danger: #ef4444;
-            --danger-light: rgba(239, 68, 68, 0.1);
-            --success: #10b981;
-            --success-light: rgba(16, 185, 129, 0.1);
-            --radius: 14px;
-            --radius-sm: 10px;
-            --radius-xs: 7px;
+            --bg: #09090b;
+            --bg-subtle: #0f0f12;
+            --surface: rgba(255, 255, 255, 0.03);
+            --surface-hover: rgba(255, 255, 255, 0.06);
+            --surface-active: rgba(255, 255, 255, 0.08);
+            --border: rgba(255, 255, 255, 0.06);
+            --border-hover: rgba(255, 255, 255, 0.12);
+            --border-active: rgba(52, 211, 153, 0.3);
+            --text: #e4e4e7;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #34d399;
+            --accent-dim: rgba(52, 211, 153, 0.12);
+            --accent-dim-hover: rgba(52, 211, 153, 0.2);
+            --danger: #f87171;
+            --danger-dim: rgba(248, 113, 113, 0.1);
+            --danger-dim-hover: rgba(248, 113, 113, 0.18);
+            --warn: #fbbf24;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --radius-xs: 6px;
+            --ease: cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #eef0f7;
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
             color: var(--text);
-            min-height: 100vh;
+            min-height: 100dvh;
             overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
         }
 
-        /* Animated background blobs */
-        .bg-blobs {
+        /* Noise texture overlay */
+        .noise {
             position: fixed;
             inset: 0;
             z-index: 0;
-            overflow: hidden;
             pointer-events: none;
-        }
-        .blob {
-            position: absolute;
-            border-radius: 50%;
-            filter: blur(80px);
-            opacity: 0.45;
-            animation: blobFloat 20s ease-in-out infinite alternate;
-        }
-        .blob-1 { width: 500px; height: 500px; background: #ddd6fe; top: -10%; left: -5%; animation-delay: 0s; }
-        .blob-2 { width: 400px; height: 400px; background: #bae6fd; top: 40%; right: -8%; animation-delay: -7s; }
-        .blob-3 { width: 350px; height: 350px; background: #fecdd3; bottom: -5%; left: 30%; animation-delay: -14s; }
-        .blob-4 { width: 280px; height: 280px; background: #bbf7d0; top: 20%; left: 50%; animation-delay: -3s; }
-
-        @keyframes blobFloat {
-            0% { transform: translate(0, 0) scale(1); }
-            33% { transform: translate(30px, -40px) scale(1.05); }
-            66% { transform: translate(-20px, 20px) scale(0.95); }
-            100% { transform: translate(15px, -15px) scale(1.02); }
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-size: 200px;
         }
 
-        /* Main container */
+        /* Ambient glow */
+        .ambient {
+            position: fixed;
+            top: -30%;
+            left: -10%;
+            width: 60%;
+            height: 60%;
+            background: radial-gradient(ellipse, rgba(52, 211, 153, 0.04) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .ambient-2 {
+            position: fixed;
+            bottom: -20%;
+            right: -15%;
+            width: 50%;
+            height: 50%;
+            background: radial-gradient(ellipse, rgba(52, 211, 153, 0.03) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Layout */
         .container {
             position: relative;
             z-index: 1;
-            padding: 24px 32px 100px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 28px 32px 100px;
         }
 
         /* Header */
@@ -81,405 +91,469 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 28px;
+            margin-bottom: 32px;
         }
         .header-left h1 {
-            font-size: 22px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-            background: var(--accent-gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            color: var(--text);
         }
         .header-sub {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
-            font-weight: 500;
+            font-weight: 400;
             margin-top: 2px;
-            letter-spacing: 0.5px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
         }
 
-        /* Tabs - pill style */
+        /* Tabs */
         .tabs {
             display: inline-flex;
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
-            padding: 4px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 3px;
             gap: 2px;
-            box-shadow: var(--glass-shadow);
         }
         .tab {
-            padding: 9px 20px;
-            border-radius: 9px;
+            padding: 8px 18px;
+            border-radius: var(--radius-xs);
             font-size: 13px;
-            font-weight: 600;
-            color: var(--text-secondary);
+            font-weight: 500;
+            color: var(--text-muted);
             cursor: pointer;
-            transition: all 0.25s ease;
+            transition: all 0.25s var(--ease);
             white-space: nowrap;
             border: none;
             background: transparent;
         }
-        .tab:hover { color: var(--text); }
+        .tab:hover { color: var(--text-secondary); }
         .tab.active {
-            background: var(--accent-gradient);
-            color: #fff;
-            box-shadow: 0 4px 14px rgba(108, 92, 231, 0.3);
+            background: var(--accent-dim);
+            color: var(--accent);
         }
 
         /* Add bar */
         .add-bar {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             margin-bottom: 20px;
         }
         .add-bar input {
             flex: 1;
-            padding: 11px 16px;
-            border: 1px solid var(--glass-border);
+            padding: 10px 14px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
+            background: var(--surface);
             color: var(--text);
             font-family: inherit;
-            font-size: 14px;
-            transition: all 0.2s ease;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+            font-size: 13px;
+            transition: all 0.25s var(--ease);
         }
         .add-bar input::placeholder { color: var(--text-muted); }
         .add-bar input:focus {
             outline: none;
-            border-color: var(--accent-light);
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.04), 0 0 0 3px rgba(108, 92, 231, 0.12);
-            background: rgba(255,255,255,0.8);
+            border-color: var(--border-active);
+            background: var(--surface-hover);
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.06);
         }
 
         /* Buttons */
         .btn {
-            padding: 10px 22px;
-            border: none;
+            padding: 9px 18px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
             cursor: pointer;
             font-family: inherit;
             font-size: 13px;
-            font-weight: 600;
-            transition: all 0.2s ease;
+            font-weight: 500;
+            transition: all 0.2s var(--ease);
             white-space: nowrap;
-        }
-        .btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-
-        .btn-primary {
-            background: var(--accent-gradient);
-            color: #fff;
-            box-shadow: 0 4px 14px rgba(108, 92, 231, 0.25);
-        }
-        .btn-primary:hover {
-            box-shadow: 0 6px 20px rgba(108, 92, 231, 0.35);
-            transform: translateY(-1px);
-        }
-
-        .btn-sm { padding: 6px 14px; font-size: 12px; border-radius: var(--radius-xs); }
-
-        .btn-edit {
-            background: rgba(108, 92, 231, 0.08);
-            color: var(--accent);
-        }
-        .btn-edit:hover { background: rgba(108, 92, 231, 0.15); }
-
-        .btn-copy {
-            background: var(--success-light);
-            color: var(--success);
-        }
-        .btn-copy:hover { background: rgba(16, 185, 129, 0.18); }
-        .btn-copy.copied { background: rgba(16, 185, 129, 0.25); }
-
-        .btn-delete {
-            background: var(--danger-light);
-            color: var(--danger);
-        }
-        .btn-delete:hover { background: rgba(239, 68, 68, 0.18); }
-
-        .btn-toggle {
-            background: rgba(0,0,0,0.04);
-            color: var(--text-muted);
-        }
-        .btn-toggle.active {
-            background: var(--success-light);
-            color: var(--success);
-            font-weight: 700;
-        }
-
-        .btn-cancel {
-            background: rgba(0,0,0,0.05);
+            background: var(--surface);
             color: var(--text-secondary);
         }
-        .btn-cancel:hover { background: rgba(0,0,0,0.1); }
+        .btn:hover { background: var(--surface-hover); border-color: var(--border-hover); }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
 
-        /* URL List */
+        .btn-primary {
+            background: var(--accent-dim);
+            color: var(--accent);
+            border-color: rgba(52, 211, 153, 0.15);
+        }
+        .btn-primary:hover { background: var(--accent-dim-hover); border-color: rgba(52, 211, 153, 0.25); }
+
+        .btn-sm { padding: 5px 12px; font-size: 12px; border-radius: var(--radius-xs); }
+
+        .btn-edit { color: var(--text-secondary); }
+        .btn-edit:hover { color: var(--text); }
+
+        .btn-copy { color: var(--accent); border-color: rgba(52, 211, 153, 0.1); }
+        .btn-copy:hover { background: var(--accent-dim); }
+        .btn-copy.copied { background: var(--accent-dim-hover); }
+
+        .btn-delete { color: var(--danger); border-color: rgba(248, 113, 113, 0.08); }
+        .btn-delete:hover { background: var(--danger-dim); border-color: rgba(248, 113, 113, 0.15); }
+
+        .btn-toggle { color: var(--text-muted); }
+        .btn-toggle.active { color: var(--accent); background: var(--accent-dim); border-color: rgba(52, 211, 153, 0.15); font-weight: 600; }
+
+        .btn-cancel { color: var(--text-muted); }
+        .btn-cancel:hover { color: var(--text-secondary); }
+
+        .btn-test { color: #38bdf8; border-color: rgba(56, 189, 248, 0.08); }
+        .btn-test:hover { background: rgba(56, 189, 248, 0.08); }
+        .btn-test.testing { opacity: 0.5; pointer-events: none; }
+
+        .btn-batch-del { color: var(--danger); border-color: rgba(248, 113, 113, 0.08); }
+        .btn-batch-del:hover { background: var(--danger-dim); }
+        .btn-batch-del:disabled { opacity: 0.3; }
+
+        .btn-test-all {
+            padding: 9px 18px;
+            border: 1px solid rgba(56, 189, 248, 0.1);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s var(--ease);
+            white-space: nowrap;
+            background: rgba(56, 189, 248, 0.06);
+            color: #38bdf8;
+        }
+        .btn-test-all:hover { background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.2); }
+        .btn-test-all:active { transform: scale(0.98); }
+        .btn-test-all:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* URL list */
         .url-list {
             list-style: none;
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-            gap: 8px;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 6px;
         }
 
         .url-item {
             display: flex;
             align-items: center;
-            gap: 14px;
-            padding: 14px 16px;
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
-            border: 1px solid var(--glass-border);
+            gap: 12px;
+            padding: 12px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: var(--radius);
-            transition: all 0.2s ease;
-            box-shadow: var(--glass-shadow);
+            transition: all 0.25s var(--ease);
         }
         .url-item:hover {
-            border-color: rgba(108, 92, 231, 0.25);
-            box-shadow: var(--glass-shadow-lg);
-            transform: translateY(-1px);
+            border-color: var(--border-hover);
+            background: var(--surface-hover);
         }
-        .url-item.disabled { opacity: 0.4; }
+        .url-item.disabled { opacity: 0.35; }
+        .url-item.selected {
+            border-color: var(--border-active);
+            background: var(--accent-dim);
+        }
 
         .url-info { flex: 1; min-width: 0; }
-
         .url-name {
-            font-weight: 700;
-            font-size: 14px;
+            font-weight: 600;
+            font-size: 13px;
             color: var(--text);
         }
         .url-addr {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
             word-break: break-all;
-            margin-top: 3px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
+            margin-top: 2px;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
         }
-        .url-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        .url-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
 
         .home-meta {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
-            margin-top: 3px;
+            margin-top: 2px;
         }
 
         .empty {
             text-align: center;
             color: var(--text-muted);
             padding: 60px 20px;
-            font-size: 14px;
-            font-weight: 500;
+            font-size: 13px;
+            font-weight: 400;
         }
 
         /* Filter bar */
         .filter-bar {
             display: none;
             gap: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             align-items: center;
             flex-wrap: wrap;
         }
         .filter-bar.show { display: flex; }
         .filter-bar select {
-            padding: 9px 14px;
-            border: 1px solid var(--glass-border);
+            padding: 8px 12px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
+            background: var(--surface);
             color: var(--text);
             font-family: inherit;
-            font-size: 13px;
+            font-size: 12px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: var(--glass-shadow);
-            min-width: 110px;
+            transition: all 0.2s var(--ease);
+            min-width: 100px;
         }
         .filter-bar select:focus {
             outline: none;
-            border-color: var(--accent-light);
-            box-shadow: var(--glass-shadow), 0 0 0 3px rgba(108, 92, 231, 0.1);
+            border-color: var(--border-active);
         }
-        .filter-bar select option { background: #fff; color: var(--text); }
+        .filter-bar select option { background: #18181b; color: var(--text); }
         .filter-count {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
             font-weight: 500;
             margin-left: auto;
+            font-family: 'SF Mono', monospace;
         }
 
-        /* Batch actions for home content */
+        /* Batch bar */
         .batch-bar {
             display: none;
             gap: 8px;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         .batch-bar.show { display: flex; }
         .batch-bar label {
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 13px;
+            font-size: 12px;
             color: var(--text-secondary);
             font-weight: 500;
             cursor: pointer;
             user-select: none;
         }
         .batch-bar input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
+            width: 15px;
+            height: 15px;
             accent-color: var(--accent);
             cursor: pointer;
         }
         .batch-selected {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
         }
-        .btn-batch-del {
-            background: var(--danger-light);
-            color: var(--danger);
-        }
-        .btn-batch-del:hover { background: rgba(239, 68, 68, 0.18); }
-        .btn-batch-del:disabled { opacity: 0.35; }
 
-        .url-item .item-check {
-            flex-shrink: 0;
-        }
+        .url-item .item-check { flex-shrink: 0; }
         .url-item .item-check input {
-            width: 16px;
-            height: 16px;
+            width: 15px;
+            height: 15px;
             accent-color: var(--accent);
             cursor: pointer;
         }
-        .url-item.selected {
-            border-color: rgba(108, 92, 231, 0.4);
-            background: rgba(108, 92, 231, 0.06);
+
+        /* Test status */
+        .url-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 7px;
+            border-radius: 20px;
+            margin-left: 6px;
+            line-height: 1.6;
+            vertical-align: middle;
+            cursor: pointer;
+            transition: all 0.15s var(--ease);
+        }
+        .url-status.clickable:hover { filter: brightness(1.2); }
+        .url-status.ok { background: var(--accent-dim); color: var(--accent); }
+        .url-status.fail { background: var(--danger-dim); color: var(--danger); }
+        .url-status.testing { background: rgba(56, 189, 248, 0.08); color: #38bdf8; cursor: default; }
+        .url-status .dot {
+            width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+        }
+        .url-status.testing .dot { animation: pulse 1s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+        /* Test detail popover */
+        .test-detail {
+            display: none;
+            position: fixed;
+            z-index: 200;
+            background: #1a1a1f;
+            border: 1px solid var(--border-hover);
+            border-radius: 10px;
+            padding: 16px;
+            min-width: 260px;
+            max-width: 360px;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+            font-size: 12px;
+        }
+        .test-detail.show { display: block; }
+        .test-detail-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--text);
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .test-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+        }
+        .test-detail-label { color: var(--text-muted); }
+        .test-detail-value { color: var(--text); font-family: 'SF Mono', 'JetBrains Mono', monospace; font-weight: 500; }
+        .test-detail-value.ok { color: var(--accent); }
+        .test-detail-value.fail { color: var(--danger); }
+        .test-detail-body {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+        .test-detail-body pre {
+            font-family: 'SF Mono', 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-secondary);
+            max-height: 120px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: var(--surface);
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
         }
 
         /* Video grid */
-        .video-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+        .video-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
         .video-grid.show { display: grid; }
         .video-card {
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
-            border: 1px solid var(--glass-border);
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: var(--radius);
             overflow: hidden;
             cursor: pointer;
-            transition: all 0.25s ease;
+            transition: all 0.25s var(--ease);
             position: relative;
-            box-shadow: var(--glass-shadow);
         }
         .video-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--glass-shadow-lg);
-            border-color: rgba(108, 92, 231, 0.25);
+            transform: translateY(-2px);
+            border-color: var(--border-hover);
+            background: var(--surface-hover);
+        }
+        .video-card:active { transform: translateY(0) scale(0.98); }
+        .video-card.selected {
+            border-color: var(--border-active);
+            background: var(--accent-dim);
         }
         .video-card-img {
             width: 100%;
             aspect-ratio: 3/4;
             object-fit: cover;
-            background: linear-gradient(135deg, rgba(238,240,247,0.6), rgba(221,214,254,0.4));
+            background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
             display: block;
         }
         .video-card-img[src=""] { display: none; }
-        .video-card-body { padding: 12px 14px; }
+        .video-card-body { padding: 10px 12px; }
         .video-card-title {
-            font-size: 13px;
-            font-weight: 700;
+            font-size: 12px;
+            font-weight: 600;
             color: var(--text);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .video-card-meta {
-            font-size: 11px;
+            font-size: 10px;
             color: var(--text-muted);
-            margin-top: 4px;
+            margin-top: 3px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .video-card-del {
             position: absolute;
-            top: 8px;
-            right: 8px;
-            background: rgba(255,255,255,0.85);
+            top: 6px;
+            right: 6px;
+            background: rgba(0, 0, 0, 0.6);
             backdrop-filter: blur(8px);
-            border: none;
+            border: 1px solid rgba(255,255,255,0.08);
             color: var(--danger);
-            width: 26px;
-            height: 26px;
+            width: 24px;
+            height: 24px;
             border-radius: 50%;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
             display: none;
             align-items: center;
             justify-content: center;
-            transition: all 0.15s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.15s var(--ease);
         }
         .video-card:hover .video-card-del { display: flex; }
-        .video-card-del:hover { background: #fff; transform: scale(1.1); }
+        .video-card-del:hover { background: rgba(248, 113, 113, 0.15); }
+
+        .video-card-check {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            z-index: 3;
+        }
+        .video-card-check input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
 
         /* Video filter bar */
         .video-filter-bar {
             display: none;
             gap: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             align-items: center;
         }
         .video-filter-bar.show { display: flex; }
         .video-filter-bar input {
             flex: 1;
-            padding: 9px 14px;
-            border: 1px solid var(--glass-border);
+            padding: 8px 12px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
+            background: var(--surface);
             color: var(--text);
             font-family: inherit;
-            font-size: 13px;
-            box-shadow: var(--glass-shadow);
+            font-size: 12px;
         }
         .video-filter-bar input::placeholder { color: var(--text-muted); }
         .video-filter-bar input:focus {
             outline: none;
-            border-color: var(--accent-light);
-            box-shadow: var(--glass-shadow), 0 0 0 3px rgba(108, 92, 231, 0.1);
+            border-color: var(--border-active);
         }
         .video-filter-bar select {
-            padding: 9px 14px;
-            border: 1px solid var(--glass-border);
+            padding: 8px 12px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            background: var(--glass-bg);
-            backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
+            background: var(--surface);
             color: var(--text);
             font-family: inherit;
-            font-size: 13px;
-            box-shadow: var(--glass-shadow);
+            font-size: 12px;
         }
-        .video-filter-bar select option { background: #fff; }
+        .video-filter-bar select option { background: #18181b; }
 
         /* Modal */
         .modal-overlay {
             display: none;
             position: fixed;
             inset: 0;
-            background: rgba(30, 41, 59, 0.3);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(6px);
             z-index: 100;
             justify-content: center;
             align-items: center;
@@ -488,133 +562,127 @@
         .modal-overlay.show { display: flex; }
 
         .modal {
-            background: var(--glass-bg-heavy);
-            backdrop-filter: var(--glass-blur-heavy);
-            -webkit-backdrop-filter: var(--glass-blur-heavy);
-            border: 1px solid var(--glass-border);
-            border-radius: 20px;
-            padding: 32px;
+            background: #141418;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
             width: 100%;
-            max-width: 560px;
+            max-width: 520px;
             max-height: 85vh;
             overflow: auto;
-            box-shadow: 0 24px 64px rgba(100, 80, 160, 0.15), 0 0 0 1px rgba(255,255,255,0.5) inset;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
         }
         .modal h3 {
-            margin-bottom: 24px;
-            font-size: 17px;
-            font-weight: 700;
+            margin-bottom: 20px;
+            font-size: 15px;
+            font-weight: 600;
             color: var(--text);
-            padding-bottom: 16px;
-            border-bottom: 1px solid rgba(0,0,0,0.06);
+            padding-bottom: 14px;
+            border-bottom: 1px solid var(--border);
         }
         .modal label {
             display: block;
-            margin-bottom: 6px;
-            font-size: 12px;
+            margin-bottom: 4px;
+            font-size: 11px;
             color: var(--text-muted);
-            font-weight: 600;
+            font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
         .modal input {
             width: 100%;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            border: 1px solid var(--glass-border);
+            padding: 10px 14px;
+            margin-bottom: 14px;
+            border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            background: rgba(255,255,255,0.6);
+            background: var(--surface);
             color: var(--text);
             font-family: inherit;
-            font-size: 14px;
-            transition: all 0.2s ease;
+            font-size: 13px;
+            transition: all 0.2s var(--ease);
         }
         .modal input:focus {
             outline: none;
-            border-color: var(--accent-light);
-            box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+            border-color: var(--border-active);
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.06);
         }
-        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
 
         .json-viewer {
-            background: rgba(255,255,255,0.5);
-            border: 1px solid var(--glass-border);
-            padding: 18px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 16px;
             border-radius: var(--radius-sm);
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 12px;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 11px;
             line-height: 1.7;
             white-space: pre-wrap;
             word-break: break-all;
             max-height: 55vh;
             overflow: auto;
-            color: var(--text);
-            margin-bottom: 16px;
+            color: var(--text-secondary);
+            margin-bottom: 14px;
         }
 
         /* Player modal */
-        .player-modal { max-width: 900px; }
+        .player-modal { max-width: 860px; }
         .player-wrap {
             width: 100%;
             background: #000;
             border-radius: var(--radius-sm);
             overflow: hidden;
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
         .player-wrap video { width: 100%; max-height: 60vh; display: block; }
-        .player-info { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 13px; }
+        .player-info { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 12px; }
         .player-info dt { color: var(--text-muted); text-align: right; white-space: nowrap; font-weight: 500; }
-        .player-info dd { color: var(--text); margin: 0; }
+        .player-info dd { color: var(--text-secondary); margin: 0; }
 
         /* Loading */
         .loading { display: flex; justify-content: center; align-items: center; padding: 50px; }
         .spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid rgba(108, 92, 231, 0.12);
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border);
             border-top-color: var(--accent);
             border-radius: 50%;
-            animation: spin 0.7s linear infinite;
+            animation: spin 0.6s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(108, 92, 231, 0.15); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(108, 92, 231, 0.3); }
-
-        /* Player error overlay */
+        /* Player error */
         .player-error {
             position: absolute;
             inset: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #ef4444;
-            font-size: 14px;
+            color: var(--danger);
+            font-size: 13px;
             font-weight: 500;
             text-align: center;
             padding: 20px;
-            background: rgba(0,0,0,0.75);
+            background: rgba(0, 0, 0, 0.8);
             backdrop-filter: blur(4px);
             z-index: 2;
         }
 
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
+
         /* ===== RESPONSIVE: Mobile ===== */
         @media (max-width: 767px) {
-            .container {
-                padding: 16px 16px 80px;
-            }
+            .container { padding: 16px 14px 80px; }
 
             .header {
                 flex-direction: column;
                 align-items: flex-start;
-                gap: 14px;
+                gap: 12px;
                 margin-bottom: 20px;
             }
-
-            /* Hide inline tabs, show bottom bar */
             .tabs { display: none; }
 
             .bottom-tabs {
@@ -624,85 +692,72 @@
                 left: 0;
                 right: 0;
                 z-index: 90;
-                background: var(--glass-bg-heavy);
-                backdrop-filter: var(--glass-blur-heavy);
-                -webkit-backdrop-filter: var(--glass-blur-heavy);
-                border-top: 1px solid var(--glass-border);
-                padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
-                box-shadow: 0 -4px 24px rgba(100, 80, 160, 0.1);
+                background: rgba(14, 14, 18, 0.92);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                border-top: 1px solid var(--border);
+                padding: 5px 6px calc(5px + env(safe-area-inset-bottom, 0px));
             }
             .bottom-tab {
                 flex: 1;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 3px;
-                padding: 6px 4px;
+                gap: 2px;
+                padding: 5px 4px;
                 border: none;
                 background: transparent;
                 border-radius: var(--radius-xs);
                 cursor: pointer;
                 color: var(--text-muted);
-                font-size: 10px;
-                font-weight: 600;
+                font-size: 9px;
+                font-weight: 500;
                 font-family: inherit;
-                transition: all 0.2s ease;
+                transition: all 0.2s var(--ease);
             }
-            .bottom-tab svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; }
-            .bottom-tab.active {
-                color: var(--accent);
-                background: rgba(108, 92, 231, 0.08);
-            }
+            .bottom-tab svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+            .bottom-tab.active { color: var(--accent); background: var(--accent-dim); }
 
-            .add-bar { flex-direction: column; gap: 8px; }
-            .add-bar .btn { width: 100%; }
+            .add-bar { flex-direction: column; gap: 6px; }
+            .add-bar .btn, .add-bar .btn-test-all { width: 100%; }
 
-            .url-item {
-                padding: 12px 14px;
-                gap: 10px;
-            }
-            .url-actions {
-                flex-shrink: 0;
-                flex-wrap: wrap;
-                gap: 4px;
-            }
-            .btn-sm { padding: 5px 10px; font-size: 11px; }
+            .url-list { grid-template-columns: 1fr; }
+            .url-item { padding: 10px 12px; gap: 8px; }
+            .url-actions { flex-wrap: wrap; gap: 3px; }
+            .btn-sm { padding: 4px 9px; font-size: 11px; }
 
-            .video-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-
+            .video-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
             .video-filter-bar { flex-direction: column; }
             .video-filter-bar select { width: 100%; }
-
             .filter-bar select { min-width: 0; flex: 1; }
 
-            .modal {
-                max-width: none;
-                border-radius: 16px;
-                padding: 20px;
-            }
-            .player-modal {
-                max-height: 90vh;
-            }
+            .modal { max-width: none; border-radius: 12px; padding: 18px; }
+            .player-modal { max-height: 90vh; }
             .player-wrap video { max-height: 40vh; }
         }
 
-        /* Bottom tabs hidden on desktop */
         .bottom-tabs { display: none; }
+
+        /* Staggered reveal */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .url-item, .video-card {
+            animation: fadeUp 0.3s var(--ease) both;
+        }
     </style>
 </head>
 <body>
-    <div class="bg-blobs">
-        <div class="blob blob-1"></div>
-        <div class="blob blob-2"></div>
-        <div class="blob blob-3"></div>
-        <div class="blob blob-4"></div>
-    </div>
+    <div class="noise"></div>
+    <div class="ambient"></div>
+    <div class="ambient-2"></div>
 
     <div class="container">
         <div class="header">
             <div class="header-left">
-                <h1>TV Config</h1>
-                <div class="header-sub">Management System</div>
+                <h1>TV Management</h1>
+                <div class="header-sub">Config Control Panel</div>
             </div>
             <div class="tabs" id="desktopTabs">
                 <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
@@ -716,13 +771,14 @@
             <input type="text" id="inputName" placeholder="名称（可选）">
             <input type="text" id="inputUrl" placeholder="配置地址">
             <button class="btn btn-primary" onclick="addUrl()">添加</button>
+            <button class="btn-test-all" id="testAllBtn" onclick="testAllUrls()">全部测试</button>
         </div>
         <div class="filter-bar" id="filterBar">
             <select id="filterSpider" onchange="applyHomeFilter()"><option value="">全部类型</option></select>
             <select id="filterSource" onchange="applyHomeFilter()"><option value="">全部来源</option></select>
-            <select id="filterVideo" onchange="applyHomeFilter()">
+            <select id="filterVideo" onchange="loadHomeContents()">
                 <option value="">全部</option>
-                <option value="yes">有视频</option>
+                <option value="yes" selected>有视频</option>
                 <option value="no">无视频</option>
             </select>
             <span class="filter-count" id="filterCount"></span>
@@ -730,7 +786,8 @@
         <div class="batch-bar" id="batchBar">
             <label><input type="checkbox" id="selectAll" onchange="toggleSelectAll()">全选</label>
             <span class="batch-selected" id="batchCount"></span>
-            <button class="btn btn-sm btn-batch-del" id="batchDelBtn" onclick="batchDeleteHome()" disabled>批量删除</button>
+            <button class="btn btn-sm btn-test" id="batchTestBtn" onclick="testSelectedUrls()" style="display:none">批量测试</button>
+            <button class="btn btn-sm btn-batch-del" id="batchDelBtn" onclick="batchDelete()" disabled>批量删除</button>
         </div>
         <ul class="url-list" id="urlList"></ul>
         <div class="video-filter-bar" id="videoFilterBar">
@@ -761,6 +818,8 @@
         </button>
     </div>
 
+    <div class="test-detail" id="testDetail"></div>
+
     <div class="modal-overlay" id="editModal">
         <div class="modal">
             <h3>编辑配置</h3>
@@ -790,7 +849,7 @@
             <h3 id="playerTitle">播放器</h3>
             <div class="player-wrap" style="position:relative"><video id="videoPlayer" controls autoplay></video></div>
             <dl class="player-info" id="playerInfo"></dl>
-            <div class="modal-actions" style="margin-top:16px">
+            <div class="modal-actions" style="margin-top:14px">
                 <button class="btn btn-cancel" onclick="closePlayer()">关闭</button>
             </div>
         </div>
@@ -819,14 +878,20 @@
             const videoGrid = document.getElementById('videoGrid');
             const urlList = document.getElementById('urlList');
             addBar.style.display = type >= 2 ? 'none' : 'flex';
+            document.getElementById('testAllBtn').style.display = type >= 2 ? 'none' : '';
             filterBar.classList.toggle('show', type === 2);
-            document.getElementById('batchBar').classList.toggle('show', type === 2);
+            document.getElementById('batchBar').classList.toggle('show', true);
+            document.getElementById('batchTestBtn').style.display = type < 2 ? '' : 'none';
             videoBar.classList.toggle('show', type === 3);
             urlList.style.display = type === 3 ? 'none' : '';
             videoGrid.classList.toggle('show', type === 3);
             if (type === 2) loadHomeContents();
             else if (type === 3) loadVideos();
             else loadUrls();
+            document.getElementById('selectAll').checked = false;
+            document.getElementById('selectAll').indeterminate = false;
+            document.getElementById('batchCount').textContent = '';
+            document.getElementById('batchDelBtn').disabled = true;
         }
 
         async function loadUrls() {
@@ -842,15 +907,19 @@
                 return;
             }
             empty.style.display = 'none';
-            data.urls.forEach(item => {
+            data.urls.forEach((item, idx) => {
                 const li = document.createElement('li');
                 li.className = 'url-item' + (item.enabled ? '' : ' disabled');
+                li.dataset.id = item.id;
+                li.style.animationDelay = `${idx * 40}ms`;
                 li.innerHTML = `
+                    <div class="item-check"><input type="checkbox" data-id="${item.id}" onchange="updateUrlBatchState()"></div>
                     <div class="url-info">
-                        <div class="url-name">${esc(item.name || '未命名')}</div>
+                        <div class="url-name">${esc(item.name || '未命名')} <span class="url-status" id="status-${item.id}" style="display:none"></span></div>
                         <div class="url-addr">${esc(item.url)}</div>
                     </div>
                     <div class="url-actions">
+                        <button class="btn btn-sm btn-test" id="testBtn-${item.id}" onclick="testSingleUrl(${item.id})">测试</button>
                         <button class="btn btn-sm btn-toggle ${item.enabled ? 'active' : ''}" onclick="toggleUrl(${item.id}, ${!item.enabled})">${item.enabled ? 'ON' : 'OFF'}</button>
                         <button class="btn btn-sm btn-edit" onclick="openEdit(${item.id}, '${esc(item.name)}', '${esc(item.url)}')">编辑</button>
                         <button class="btn btn-sm btn-delete" onclick="removeUrl(${item.id})">删除</button>
@@ -858,13 +927,20 @@
                 `;
                 list.appendChild(li);
             });
+            data.urls.forEach(item => restoreTestStatus(item.id));
+            updateUrlBatchState();
         }
 
         let homeRawItems = [];
 
         async function loadHomeContents() {
             showLoading();
-            const resp = await fetch('api/home-contents');
+            const fVideo = document.getElementById('filterVideo').value;
+            const params = new URLSearchParams();
+            if (fVideo === 'yes') params.set('has_video', 'true');
+            else if (fVideo === 'no') params.set('has_video', 'false');
+            const qs = params.toString();
+            const resp = await fetch('api/home-contents' + (qs ? '?' + qs : ''));
             const data = await resp.json();
             homeRawItems = data.items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
             buildFilterOptions();
@@ -898,7 +974,6 @@
         function applyHomeFilter() {
             const fSpider = document.getElementById('filterSpider').value;
             const fSource = document.getElementById('filterSource').value;
-            const fVideo = document.getElementById('filterVideo').value;
             const list = document.getElementById('urlList');
             const empty = document.getElementById('empty');
             list.innerHTML = '';
@@ -906,8 +981,6 @@
                 const m = parseItemMeta(item);
                 if (fSpider && m.spiderType !== fSpider) return false;
                 if (fSource && item.config_name !== fSource) return false;
-                if (fVideo === 'yes' && m.vodCount === 0) return false;
-                if (fVideo === 'no' && m.vodCount > 0) return false;
                 return true;
             });
             document.getElementById('filterCount').textContent = filtered.length + ' / ' + homeRawItems.length;
@@ -917,14 +990,15 @@
                 return;
             }
             empty.style.display = 'none';
-            filtered.forEach(item => {
+            filtered.forEach((item, idx) => {
                 const m = parseItemMeta(item);
                 const li = document.createElement('li');
                 li.className = 'url-item';
                 li.dataset.siteKey = item.site_key;
+                li.style.animationDelay = `${idx * 40}ms`;
                 const configLabel = item.config_name ? '来源: ' + esc(item.config_name) : '';
                 li.innerHTML = `
-                    <div class="item-check"><input type="checkbox" data-key="${esc(item.site_key)}" onchange="updateBatchState()"></div>
+                    <div class="item-check"><input type="checkbox" data-key="${esc(item.site_key)}" onchange="updateHomeBatchState()"></div>
                     <div class="url-info">
                         <div class="url-name">${esc(item.site_name || item.site_key)}</div>
                         <div class="home-meta">${esc(item.site_key)}${configLabel ? ' · ' + configLabel : ''} · ${m.typeCount} 分类 · ${m.vodCount} 视频 · ${formatTime(item.updated_at)}</div>
@@ -937,20 +1011,34 @@
                 `;
                 list.appendChild(li);
             });
-            updateBatchState();
-        }
-
-        function getHomeCheckboxes() {
-            return document.querySelectorAll('.url-item input[data-key]');
-        }
-
-        function getCheckedKeys() {
-            return [...getHomeCheckboxes()].filter(cb => cb.checked).map(cb => cb.dataset.key);
+            updateHomeBatchState();
         }
 
         function updateBatchState() {
-            const cbs = getHomeCheckboxes();
-            const checked = getCheckedKeys();
+            if (currentType === 0 || currentType === 1) updateUrlBatchState();
+            else if (currentType === 2) updateHomeBatchState();
+            else if (currentType === 3) updateVideoBatchState();
+        }
+
+        function updateUrlBatchState() {
+            const cbs = document.querySelectorAll('.url-item input[data-id]');
+            const checked = [...cbs].filter(cb => cb.checked);
+            const selectAll = document.getElementById('selectAll');
+            selectAll.checked = cbs.length > 0 && checked.length === cbs.length;
+            selectAll.indeterminate = checked.length > 0 && checked.length < cbs.length;
+            document.getElementById('batchCount').textContent = checked.length ? `已选 ${checked.length} 项` : '';
+            document.getElementById('batchDelBtn').disabled = checked.length === 0;
+            const batchTestBtn = document.getElementById('batchTestBtn');
+            if (batchTestBtn) batchTestBtn.disabled = checked.length === 0;
+            document.querySelectorAll('.url-item').forEach(li => {
+                const cb = li.querySelector('input[data-id]');
+                li.classList.toggle('selected', cb && cb.checked);
+            });
+        }
+
+        function updateHomeBatchState() {
+            const cbs = document.querySelectorAll('.url-item input[data-key]');
+            const checked = [...cbs].filter(cb => cb.checked);
             const selectAll = document.getElementById('selectAll');
             selectAll.checked = cbs.length > 0 && checked.length === cbs.length;
             selectAll.indeterminate = checked.length > 0 && checked.length < cbs.length;
@@ -962,22 +1050,78 @@
             });
         }
 
+        function updateVideoBatchState() {
+            const cbs = document.querySelectorAll('.video-card input[data-id]');
+            const checked = [...cbs].filter(cb => cb.checked);
+            const selectAll = document.getElementById('selectAll');
+            selectAll.checked = cbs.length > 0 && checked.length === cbs.length;
+            selectAll.indeterminate = checked.length > 0 && checked.length < cbs.length;
+            document.getElementById('batchCount').textContent = checked.length ? `已选 ${checked.length} 项` : '';
+            document.getElementById('batchDelBtn').disabled = checked.length === 0;
+            document.querySelectorAll('.video-card').forEach(card => {
+                const cb = card.querySelector('input[data-id]');
+                card.classList.toggle('selected', cb && cb.checked);
+            });
+        }
+
         function toggleSelectAll() {
             const checked = document.getElementById('selectAll').checked;
-            getHomeCheckboxes().forEach(cb => { cb.checked = checked; });
+            let cbs;
+            if (currentType === 2) cbs = document.querySelectorAll('.url-item input[data-key]');
+            else if (currentType === 3) cbs = document.querySelectorAll('.video-card input[data-id]');
+            else cbs = document.querySelectorAll('.url-item input[data-id]');
+            cbs.forEach(cb => { cb.checked = checked; });
             updateBatchState();
         }
 
+        async function batchDelete() {
+            if (currentType === 0 || currentType === 1) return batchDeleteUrls();
+            if (currentType === 2) return batchDeleteHome();
+            if (currentType === 3) return batchDeleteVideos();
+        }
+
+        async function batchDeleteUrls() {
+            const ids = [...document.querySelectorAll('.url-item input[data-id]')].filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
+            if (ids.length === 0) return;
+            if (!confirm(`确定删除选中的 ${ids.length} 条配置？`)) return;
+            setLoadingBtns(true);
+            try {
+                await fetch('api/urls/batch-delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ids})
+                });
+                await loadUrls();
+            } finally { setLoadingBtns(false); }
+        }
+
         async function batchDeleteHome() {
-            const keys = getCheckedKeys();
+            const keys = [...document.querySelectorAll('.url-item input[data-key]')].filter(cb => cb.checked).map(cb => cb.dataset.key);
             if (keys.length === 0) return;
             if (!confirm(`确定删除选中的 ${keys.length} 条数据？`)) return;
             setLoadingBtns(true);
             try {
-                await Promise.all(keys.map(key =>
-                    fetch(`api/home-contents/${encodeURIComponent(key)}`, {method: 'DELETE'})
-                ));
+                await fetch('api/home-contents/batch-delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({keys})
+                });
                 await loadHomeContents();
+            } finally { setLoadingBtns(false); }
+        }
+
+        async function batchDeleteVideos() {
+            const ids = [...document.querySelectorAll('.video-card input[data-id]')].filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
+            if (ids.length === 0) return;
+            if (!confirm(`确定删除选中的 ${ids.length} 条记录？`)) return;
+            setLoadingBtns(true);
+            try {
+                await fetch('api/videos/batch-delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ids})
+                });
+                await loadVideos();
             } finally { setLoadingBtns(false); }
         }
 
@@ -1032,6 +1176,157 @@
                 await fetch(`api/home-contents/${encodeURIComponent(siteKey)}`, {method: 'DELETE'});
                 await loadHomeContents();
             } finally { setLoadingBtns(false); }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        const TEST_CACHE_KEY = 'tv_test_results';
+
+        function saveTestResult(id, result) {
+            const cache = JSON.parse(localStorage.getItem(TEST_CACHE_KEY) || '{}');
+            cache[id] = { ...result, cached_at: Date.now() };
+            localStorage.setItem(TEST_CACHE_KEY, JSON.stringify(cache));
+        }
+
+        function getTestResult(id) {
+            const cache = JSON.parse(localStorage.getItem(TEST_CACHE_KEY) || '{}');
+            return cache[id] || null;
+        }
+
+        function renderTestStatus(id, result) {
+            saveTestResult(id, result);
+            const el = document.getElementById(`status-${id}`);
+            if (!el) return;
+            el.style.display = 'inline-flex';
+            if (result.error) {
+                el.className = 'url-status fail clickable';
+                el.innerHTML = `<span class="dot"></span>无效 · ${result.elapsed_ms || 0}ms`;
+                el.onclick = () => showTestDetail(id, el);
+            } else if (result.usable) {
+                el.className = 'url-status ok clickable';
+                el.innerHTML = `<span class="dot"></span>有效 · ${result.elapsed_ms}ms`;
+                el.onclick = () => showTestDetail(id, el);
+            } else {
+                el.className = 'url-status fail clickable';
+                el.innerHTML = `<span class="dot"></span>无效 · ${result.elapsed_ms}ms`;
+                el.onclick = () => showTestDetail(id, el);
+            }
+        }
+
+        function restoreTestStatus(id) {
+            const result = getTestResult(id);
+            if (!result) return;
+            renderTestStatus(id, result);
+        }
+
+        function showTestDetail(id, anchorEl) {
+            const result = getTestResult(id);
+            if (!result) return;
+            const detail = document.getElementById('testDetail');
+            const age = result.cached_at ? Math.round((Date.now() - result.cached_at) / 1000) : 0;
+            const ageStr = age < 60 ? `${age}s ago` : age < 3600 ? `${Math.floor(age/60)}m ago` : `${Math.floor(age/3600)}h ago`;
+            let body = '';
+            if (result.error) {
+                body = `<div class="test-detail-body"><pre>${esc(result.error)}</pre></div>`;
+            } else if (result.body_preview) {
+                body = `<div class="test-detail-body"><pre>${esc(result.body_preview)}</pre></div>`;
+            }
+            detail.innerHTML = `
+                <div class="test-detail-title">测试结果 <span style="color:var(--text-muted);font-weight:400;font-size:10px">${ageStr}</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">状态</span><span class="test-detail-value ${result.usable ? 'ok' : 'fail'}">${result.error ? '失败' : result.usable ? '有效' : '无效'}${result.usable_msg ? ' · ' + esc(result.usable_msg) : ''}</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">HTTP 状态</span><span class="test-detail-value">${result.status || '-'}</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">耗时</span><span class="test-detail-value">${result.elapsed_ms || 0}ms</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">响应体大小</span><span class="test-detail-value">${formatSize(result.body_size || 0)}</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">Content-Type</span><span class="test-detail-value">${esc(result.content_type || '-')}</span></div>
+                <div class="test-detail-row"><span class="test-detail-label">JSON</span><span class="test-detail-value">${result.is_json ? 'Yes' : 'No'}</span></div>
+                ${body}
+            `;
+            const rect = anchorEl.getBoundingClientRect();
+            let top = rect.bottom + 8;
+            let left = rect.left;
+            if (top + 250 > window.innerHeight) top = rect.top - 250;
+            if (left + 300 > window.innerWidth) left = window.innerWidth - 320;
+            detail.style.top = top + 'px';
+            detail.style.left = Math.max(8, left) + 'px';
+            detail.classList.add('show');
+        }
+
+        document.addEventListener('click', (e) => {
+            const detail = document.getElementById('testDetail');
+            if (detail.classList.contains('show') && !detail.contains(e.target) && !e.target.closest('.url-status')) {
+                detail.classList.remove('show');
+            }
+        });
+
+        function showTestingStatus(id) {
+            const el = document.getElementById(`status-${id}`);
+            if (el) {
+                el.style.display = 'inline-flex';
+                el.className = 'url-status testing';
+                el.innerHTML = `<span class="dot"></span>测试中...`;
+                el.onclick = null;
+            }
+        }
+
+        async function testSingleUrl(id) {
+            const btn = document.getElementById(`testBtn-${id}`);
+            if (btn) { btn.classList.add('testing'); btn.textContent = '测试中'; }
+            showTestingStatus(id);
+            try {
+                const resp = await fetch(`api/urls/${id}/test`, {method: 'POST'});
+                const result = await resp.json();
+                renderTestStatus(id, result);
+            } catch(e) {
+                renderTestStatus(id, {error: '请求失败'});
+            } finally {
+                if (btn) { btn.classList.remove('testing'); btn.textContent = '测试'; }
+            }
+        }
+
+        async function parallelTest(ids) {
+            ids.forEach(id => showTestingStatus(id));
+            const limit = 20;
+            let i = 0;
+            const testOne = async (id) => {
+                try {
+                    const resp = await fetch(`api/urls/${id}/test`, {method: 'POST'});
+                    renderTestStatus(id, await resp.json());
+                } catch(e) {
+                    renderTestStatus(id, {error: '请求失败'});
+                }
+            };
+            const workers = Array.from({length: Math.min(limit, ids.length)}, async () => {
+                while (i < ids.length) {
+                    const id = ids[i++];
+                    await testOne(id);
+                }
+            });
+            await Promise.all(workers);
+        }
+
+        async function testAllUrls() {
+            const btn = document.getElementById('testAllBtn');
+            btn.disabled = true;
+            btn.textContent = '测试中...';
+            const ids = [...document.querySelectorAll('.url-item input[data-id]')].map(cb => parseInt(cb.dataset.id));
+            await parallelTest(ids);
+            btn.disabled = false;
+            btn.textContent = '全部测试';
+        }
+
+        async function testSelectedUrls() {
+            const ids = [...document.querySelectorAll('.url-item input[data-id]')].filter(cb => cb.checked).map(cb => parseInt(cb.dataset.id));
+            if (ids.length === 0) return;
+            const btn = document.getElementById('batchTestBtn');
+            btn.classList.add('testing');
+            btn.textContent = '测试中...';
+            await parallelTest(ids);
+            btn.classList.remove('testing');
+            btn.textContent = '批量测试';
         }
 
         function formatTime(iso) {
@@ -1153,10 +1448,13 @@
                 return;
             }
             empty.style.display = 'none';
-            filtered.forEach(v => {
+            filtered.forEach((v, idx) => {
                 const card = document.createElement('div');
                 card.className = 'video-card';
+                card.dataset.id = v.id;
+                card.style.animationDelay = `${idx * 30}ms`;
                 card.innerHTML = `
+                    <div class="video-card-check"><input type="checkbox" data-id="${v.id}" onclick="event.stopPropagation();updateVideoBatchState()"></div>
                     <button class="video-card-del" onclick="event.stopPropagation();removeVideo(${v.id})">×</button>
                     ${v.vod_pic ? `<img class="video-card-img" src="${esc(v.vod_pic)}" loading="lazy" onerror="this.style.display='none'">` : ''}
                     <div class="video-card-body">
@@ -1167,6 +1465,7 @@
                 card.onclick = () => playVideo(v);
                 grid.appendChild(card);
             });
+            updateVideoBatchState();
         }
 
         function showPlayerError(msg) {
@@ -1209,7 +1508,6 @@
 
             const proxyUrl = `api/videos/proxy?url=${encodeURIComponent(v.play_url)}&headers=${encodeURIComponent(v.headers)}`;
 
-            // Pre-check m3u8 links for expiration
             if (/\.m3u8/i.test(v.play_url) || !/\.mp4|\.mkv|\.avi|\.flv/i.test(v.play_url)) {
                 modal.classList.add('show');
                 try {
@@ -1275,7 +1573,7 @@
             await loadVideos();
         }
 
-        loadUrls();
+        switchTab(0);
     </script>
 </body>
 </html>

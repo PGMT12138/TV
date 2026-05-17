@@ -140,6 +140,14 @@ def delete_url(row_id: int):
     conn.close()
 
 
+def delete_urls_batch(row_ids: list[int]):
+    conn = get_conn()
+    placeholders = ",".join("?" * len(row_ids))
+    conn.execute(f"DELETE FROM urls WHERE id IN ({placeholders})", row_ids)
+    conn.commit()
+    conn.close()
+
+
 def upsert_home_content(site_key: str, site_name: str, config_name: str, content: str) -> dict:
     conn = get_conn()
     now = datetime.now().isoformat()
@@ -153,9 +161,14 @@ def upsert_home_content(site_key: str, site_name: str, config_name: str, content
     return dict(row)
 
 
-def get_home_contents() -> list[dict]:
+def get_home_contents(has_video: bool | None = None) -> list[dict]:
     conn = get_conn()
-    rows = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents ORDER BY updated_at DESC").fetchall()
+    if has_video is True:
+        rows = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents WHERE content LIKE '%\"list\":%' ORDER BY updated_at DESC").fetchall()
+    elif has_video is False:
+        rows = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents WHERE content NOT LIKE '%\"list\":%' ORDER BY updated_at DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT site_key, site_name, config_name, content, updated_at FROM home_contents ORDER BY updated_at DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -218,5 +231,21 @@ def get_video(video_id: int) -> dict:
 def delete_video(video_id: int):
     conn = get_conn()
     conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_videos_batch(video_ids: list[int]):
+    conn = get_conn()
+    placeholders = ",".join("?" * len(video_ids))
+    conn.execute(f"DELETE FROM videos WHERE id IN ({placeholders})", video_ids)
+    conn.commit()
+    conn.close()
+
+
+def delete_home_contents_batch(site_keys: list[str]):
+    conn = get_conn()
+    placeholders = ",".join("?" * len(site_keys))
+    conn.execute(f"DELETE FROM home_contents WHERE site_key IN ({placeholders})", site_keys)
     conn.commit()
     conn.close()
