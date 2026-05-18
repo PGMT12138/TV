@@ -58,7 +58,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaCallback, B
         mBinding.bufferText.setText(String.valueOf(Setting.getBuffer()));
         mBinding.audioDecodeText.setText(getSwitch(Setting.isAudioPrefer()));
         mBinding.videoDecodeText.setText(getSwitch(Setting.isVideoPrefer()));
-        mBinding.danmakuLoadText.setText(getSwitch(Setting.isDanmakuLoad()));
         mBinding.caption.setVisibility(Setting.hasCaption() ? View.VISIBLE : View.GONE);
         mBinding.scaleText.setText((scale = ResUtil.getStringArray(R.array.select_scale))[Setting.getScale()]);
         mBinding.renderText.setText((render = ResUtil.getStringArray(R.array.select_render))[Setting.getRender()]);
@@ -81,7 +80,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaCallback, B
         mBinding.background.setOnClickListener(this::onBackground);
         mBinding.audioDecode.setOnClickListener(this::setAudioDecode);
         mBinding.videoDecode.setOnClickListener(this::setVideoDecode);
-        mBinding.danmakuLoad.setOnClickListener(this::setDanmakuLoad);
     }
 
     private void onUa(View view) {
@@ -171,11 +169,6 @@ public class SettingPlayerFragment extends BaseFragment implements UaCallback, B
     private void setVideoDecode(View view) {
         Setting.putVideoPrefer(!Setting.isVideoPrefer());
         mBinding.videoDecodeText.setText(getSwitch(Setting.isVideoPrefer()));
-    }
-
-    private void setDanmakuLoad(View view) {
-        Setting.putDanmakuLoad(!Setting.isDanmakuLoad());
-        mBinding.danmakuLoadText.setText(getSwitch(Setting.isDanmakuLoad()));
     }
 
     @Override

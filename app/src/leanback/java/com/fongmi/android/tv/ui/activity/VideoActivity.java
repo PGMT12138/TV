@@ -35,7 +35,6 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.api.SiteApi;
 import com.fongmi.android.tv.api.config.VodConfig;
-import com.fongmi.android.tv.bean.Danmaku;
 import com.fongmi.android.tv.bean.Episode;
 import com.fongmi.android.tv.bean.Flag;
 import com.fongmi.android.tv.bean.History;
@@ -66,7 +65,6 @@ import com.fongmi.android.tv.ui.custom.CustomKeyDownVod;
 import com.fongmi.android.tv.ui.custom.CustomMovement;
 import com.fongmi.android.tv.ui.custom.CustomSeekView;
 import com.fongmi.android.tv.ui.dialog.ContentDialog;
-import com.fongmi.android.tv.ui.dialog.DanmakuDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.TrackDialog;
 import com.fongmi.android.tv.utils.Clock;
@@ -242,8 +240,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
 
     @Override
     protected void onServiceConnected() {
-        player().setDanmakuView(mBinding.danmaku);
-        setDanmakuSize();
         checkId();
     }
 
@@ -307,7 +303,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         mBinding.control.action.decode.setOnClickListener(view -> onDecode());
         mBinding.control.action.ending.setOnClickListener(view -> onEnding());
         mBinding.control.action.change2.setOnClickListener(view -> onChange());
-        mBinding.control.action.danmaku.setOnClickListener(view -> onDanmaku());
         mBinding.control.action.opening.setOnClickListener(view -> onOpening());
         mBinding.control.action.speed.setOnLongClickListener(view -> onSpeedLong());
         mBinding.control.action.reset.setOnLongClickListener(view -> onResetToggle());
@@ -360,7 +355,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     }
 
     private void setVideoView() {
-        mBinding.control.action.danmaku.setVisibility(Setting.isDanmakuLoad() ? View.VISIBLE : View.GONE);
         mBinding.control.action.reset.setText(ResUtil.getStringArray(R.array.select_reset)[Setting.getReset()]);
     }
 
@@ -632,7 +626,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         mBinding.flag.setSelectedPosition(mFlagAdapter.getPosition());
         mKeyDown.setFull(true);
         setFullscreen(true);
-        setDanmakuSize();
         mFocus2 = null;
     }
 
@@ -642,14 +635,8 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         getFocus1().requestFocus();
         mKeyDown.setFull(false);
         setFullscreen(false);
-        setDanmakuSize();
         mFocus2 = null;
         hideInfo();
-    }
-
-    private void setDanmakuSize() {
-        if (service() == null) return;
-        player().setDanmakuSize(isFullscreen() ? 1.2f : 0.8f);
     }
 
     private void onContent() {
@@ -822,11 +809,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
     }
 
     private void onTitle() {
-        hideControl();
-    }
-
-    private void onDanmaku() {
-        DanmakuDialog.create().player(player()).show(this);
         hideControl();
     }
 
@@ -1154,7 +1136,6 @@ public class VideoActivity extends PlaybackActivity implements CustomKeyDownVod.
         else if (event.getType() == RefreshEvent.Type.PLAYER) onRefresh();
         else if (event.getType() == RefreshEvent.Type.VOD) updateVod(event.getVod());
         else if (event.getType() == RefreshEvent.Type.SUBTITLE) player().setSub(Sub.from(event.getPath()));
-        else if (event.getType() == RefreshEvent.Type.DANMAKU) player().setDanmaku(Danmaku.from(event.getPath()));
     }
 
     private void setPosition() {

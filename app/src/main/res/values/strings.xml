@@ -56,9 +56,6 @@
     <string name="play_switch_site">Switching site to <xliff:g name="name">%s</xliff:g></string>
     <string name="play_switch_parse">Switching parse to <xliff:g name="name">%s</xliff:g></string>
 
-    <!-- Danmaku -->
-    <string name="danmaku">Danmaku</string>
-    <string name="danmaku_select">Select danmaku</string>
 
     <!-- Parse -->
     <string name="parse">Parse</string>
@@ -104,7 +101,6 @@
     <string name="player_audio_decode">Audio software decode</string>
     <string name="player_video_decode">Video software decode</string>
     <string name="player_aac_track">Prefer aac track</string>
-    <string name="player_danmaku_load">Danmaku load</string>
     <string name="player_adblock">Remove ads</string>
     <string name="player_tunnel">Tunnel mode</string>
     <string name="player_buffer">Buffer time</string>

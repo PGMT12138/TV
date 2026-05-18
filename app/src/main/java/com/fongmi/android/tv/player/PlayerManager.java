@@ -15,12 +15,10 @@ import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.Constant;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.bean.Danmaku;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Sub;
 import com.fongmi.android.tv.bean.Track;
 import com.fongmi.android.tv.impl.ParseCallback;
-import com.fongmi.android.tv.player.danmaku.DanPlayer;
 import com.fongmi.android.tv.player.engine.ExoPlayerEngine;
 import com.fongmi.android.tv.player.engine.PlaySpec;
 import com.fongmi.android.tv.player.engine.PlayerEngine;
@@ -34,14 +32,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import master.flame.danmaku.ui.widget.DanmakuView;
-
 public class PlayerManager implements ParseCallback {
 
     private final Runnable runnable;
     private final Callback callback;
     private PlayerEngine engine;
-    private DanPlayer danPlayer;
     private VideoSize videoSize;
     private ParseJob parseJob;
     private PlaySpec spec;
@@ -60,10 +55,6 @@ public class PlayerManager implements ParseCallback {
     public void release() {
         stopParse();
         App.removeCallbacks(runnable);
-        if (danPlayer != null) {
-            danPlayer.release();
-            danPlayer = null;
-        }
         if (engine != null) {
             player.removeListener(listener);
             engine.release();
@@ -100,10 +91,6 @@ public class PlayerManager implements ParseCallback {
         return spec != null ? spec.getKey() : null;
     }
 
-    public List<Danmaku> getDanmakus() {
-        return spec != null ? spec.getDanmakus() : null;
-    }
-
     public Map<String, String> getHeaders() {
         return spec == null || spec.getHeaders() == null ? new HashMap<>() : spec.getHeaders();
     }
@@ -134,10 +121,6 @@ public class PlayerManager implements ParseCallback {
 
     public boolean haveTrack(int type) {
         return engine.haveTrack(type);
-    }
-
-    public boolean haveDanmaku() {
-        return getDanmakus() != null && getDanmakus().stream().anyMatch(Danmaku::isSelected);
     }
 
     public boolean canSetOpening(long position, long duration) {
@@ -205,15 +188,6 @@ public class PlayerManager implements ParseCallback {
         engine.setMetadata(data);
     }
 
-    public void setDanmakuView(DanmakuView view) {
-        danPlayer = new DanPlayer(view);
-        danPlayer.attachPlayer(player);
-    }
-
-    public void setDanmakuSize(float size) {
-        danPlayer.setTextSize(size);
-    }
-
     public String setSpeed(float speed) {
         if (!player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) return getSpeedText();
         player.setPlaybackParameters(player.getPlaybackParameters().withSpeed(speed));
@@ -252,7 +226,6 @@ public class PlayerManager implements ParseCallback {
     }
 
     public void stop() {
-        if (danPlayer != null) danPlayer.stop();
         player.stop();
         stopParse();
     }
@@ -286,7 +259,6 @@ public class PlayerManager implements ParseCallback {
 
     private void rebuildPlayer() {
         player = engine.rebuild(listener);
-        if (danPlayer != null) danPlayer.attachPlayer(player);
         callback.onPlayerRebuild(player);
     }
 
@@ -312,7 +284,6 @@ public class PlayerManager implements ParseCallback {
 
     private void setMediaItem(long timeout) {
         if (spec == null || spec.getUrl() == null) return;
-        setDanmakus(spec.getDanmakus());
         engine.start(spec.checkUa());
         App.post(runnable, timeout);
         callback.onPrepare();
@@ -324,15 +295,6 @@ public class PlayerManager implements ParseCallback {
         clear();
         stopParse();
         start(spec, Constant.TIMEOUT_PLAY);
-    }
-
-    private void setDanmakus(List<Danmaku> items) {
-        if (danPlayer != null) setDanmaku(items == null || items.isEmpty() ? Danmaku.empty() : items.get(0));
-    }
-
-    public void setDanmaku(Danmaku item) {
-        if (spec != null) spec.setDanmaku(item);
-        if (danPlayer != null) danPlayer.setDanmaku(item);
     }
 
     @Override

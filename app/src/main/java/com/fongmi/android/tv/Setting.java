@@ -218,28 +218,12 @@ public class Setting {
         Prefers.put("prefer_aac", preferAAC);
     }
 
-    public static boolean isDanmakuLoad() {
-        return Prefers.getBoolean("danmaku_load");
-    }
-
-    public static void putDanmakuLoad(boolean danmakuLoad) {
-        Prefers.put("danmaku_load", danmakuLoad);
-    }
-
     public static boolean isAdblock() {
         return Prefers.getBoolean("adblock", true);
     }
 
     public static void putAdblock(boolean adblock) {
         Prefers.put("adblock", adblock);
-    }
-
-    public static boolean isDanmakuShow() {
-        return Prefers.getBoolean("danmaku_show");
-    }
-
-    public static void putDanmakuShow(boolean danmakuShow) {
-        Prefers.put("danmaku_show", danmakuShow);
     }
 
     public static boolean isZhuyin() {

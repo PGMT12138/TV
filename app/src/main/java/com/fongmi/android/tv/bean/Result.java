@@ -9,7 +9,6 @@ import androidx.annotation.NonNull;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.api.config.VodConfig;
-import com.fongmi.android.tv.gson.DanmakuAdapter;
 import com.fongmi.android.tv.gson.FilterAdapter;
 import com.fongmi.android.tv.gson.HeaderAdapter;
 import com.fongmi.android.tv.gson.MsgAdapter;
@@ -61,10 +60,6 @@ public class Result implements Parcelable {
     @SerializedName("msg")
     @JsonAdapter(MsgAdapter.class)
     private String msg;
-
-    @SerializedName("danmaku")
-    @JsonAdapter(DanmakuAdapter.class)
-    private List<Danmaku> danmaku;
 
     @SerializedName("subs")
     private List<Sub> subs;
@@ -245,10 +240,6 @@ public class Result implements Parcelable {
 
     public String getDesc() {
         return TextUtils.isEmpty(desc) ? "" : Util.clean(desc);
-    }
-
-    public List<Danmaku> getDanmaku() {
-        return !Setting.isDanmakuLoad() || danmaku == null ? new ArrayList<>() : danmaku;
     }
 
     public String getFormat() {

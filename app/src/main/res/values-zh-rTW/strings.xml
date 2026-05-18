@@ -56,9 +56,6 @@
     <string name="play_switch_site">正在切換站源至「<xliff:g name="name">%s</xliff:g>」</string>
     <string name="play_switch_parse">正在切换解析至「<xliff:g name="name">%s</xliff:g>」</string>
 
-    <!-- Danmaku -->
-    <string name="danmaku">彈幕</string>
-    <string name="danmaku_select">選擇彈幕</string>
 
     <!-- Parse -->
     <string name="parse">解析</string>
@@ -103,7 +100,6 @@
     <string name="player_audio_decode">音訊軟解</string>
     <string name="player_video_decode">視訊軟解</string>
     <string name="player_aac_track">AAC優先</string>
-    <string name="player_danmaku_load">彈幕載入</string>
     <string name="player_adblock">智慧去廣</string>
     <string name="player_tunnel">隧道模式</string>
     <string name="player_buffer">緩衝時間</string>

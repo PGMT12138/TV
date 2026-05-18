@@ -5,7 +5,6 @@ import android.net.Uri;
 import androidx.media3.common.MediaMetadata;
 
 import com.fongmi.android.tv.Setting;
-import com.fongmi.android.tv.bean.Danmaku;
 import com.fongmi.android.tv.bean.Drm;
 import com.fongmi.android.tv.bean.Result;
 import com.fongmi.android.tv.bean.Sub;
@@ -21,7 +20,6 @@ import java.util.Map;
 public class PlaySpec {
 
     private Map<String, String> headers;
-    private List<Danmaku> danmakus;
     private MediaMetadata metadata;
     private List<Sub> subs;
     private String format;
@@ -30,25 +28,24 @@ public class PlaySpec {
     private Drm drm;
 
     public static PlaySpec from(String key, String url, Map<String, String> headers, MediaMetadata metadata) {
-        return new PlaySpec(key, url, headers, null, null, null, null, metadata);
+        return new PlaySpec(key, url, headers, null, null, null, metadata);
     }
 
     public static PlaySpec from(Result result, String key, MediaMetadata metadata) {
-        return new PlaySpec(key, result.getRealUrl(), result.getHeader(), result.getFormat(), result.getDrm(), result.getSubs(), result.getDanmaku(), metadata);
+        return new PlaySpec(key, result.getRealUrl(), result.getHeader(), result.getFormat(), result.getDrm(), result.getSubs(), metadata);
     }
 
     public static PlaySpec fromParse(Result result, String key, MediaMetadata metadata) {
-        return new PlaySpec(key, null, null, result.getFormat(), result.getDrm(), result.getSubs(), result.getDanmaku(), metadata);
+        return new PlaySpec(key, null, null, result.getFormat(), result.getDrm(), result.getSubs(), metadata);
     }
 
-    private PlaySpec(String key, String url, Map<String, String> headers, String format, Drm drm, List<Sub> subs, List<Danmaku> danmakus, MediaMetadata metadata) {
+    private PlaySpec(String key, String url, Map<String, String> headers, String format, Drm drm, List<Sub> subs, MediaMetadata metadata) {
         this.key = key;
         this.url = url;
         this.drm = drm;
         this.subs = subs;
         this.format = format;
         this.headers = headers;
-        this.danmakus = danmakus;
         this.metadata = metadata;
     }
 
@@ -96,10 +93,6 @@ public class PlaySpec {
         return subs;
     }
 
-    public List<Danmaku> getDanmakus() {
-        return danmakus;
-    }
-
     public MediaMetadata getMetadata() {
         return metadata;
     }
@@ -119,9 +112,4 @@ public class PlaySpec {
         if (sub != null && !subs.contains(sub)) subs.add(0, sub);
     }
 
-    public void setDanmaku(Danmaku item) {
-        if (danmakus == null) danmakus = new ArrayList<>();
-        if (!item.isEmpty() && !danmakus.contains(item)) danmakus.add(0, item);
-        danmakus.forEach(danmaku -> danmaku.setSelected(danmaku.getUrl().equals(item.getUrl())));
-    }
 }
