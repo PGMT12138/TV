@@ -83,6 +83,31 @@ public class App extends Application implements Application.ActivityLifecycleCal
         super.onCreate();
         Notify.createChannel();
         registerActivityLifecycleCallbacks(this);
+        installSpiderCrashGuard();
+    }
+
+    private void installSpiderCrashGuard() {
+        handler.post(() -> {
+            while (true) {
+                try {
+                    Looper.loop();
+                } catch (Throwable t) {
+                    if (isFromSpider(t)) {
+                        android.util.Log.e("Spider", "Crash in spider code suppressed", t);
+                    } else {
+                        throw t;
+                    }
+                }
+            }
+        });
+    }
+
+    private boolean isFromSpider(Throwable t) {
+        for (StackTraceElement element : t.getStackTrace()) {
+            if (element.getClassName().startsWith("com.github.catvod.spider.")) return true;
+        }
+        Throwable cause = t.getCause();
+        return cause != null && isFromSpider(cause);
     }
 
     @Override
