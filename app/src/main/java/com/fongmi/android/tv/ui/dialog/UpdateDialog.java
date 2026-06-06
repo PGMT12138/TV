@@ -14,8 +14,8 @@ import androidx.annotation.Nullable;
 import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.App;
-import com.fongmi.android.tv.BuildConfig;
 import com.fongmi.android.tv.R;
+import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.databinding.DialogUpdateBinding;
 import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.Task;
@@ -38,12 +38,18 @@ public class UpdateDialog extends BaseDialog {
     private DialogUpdateBinding mBinding;
     private int versionCode;
     private String downloadUrl;
-    private File downloadedApk;
+    private File cachedApk;
 
     public static UpdateDialog create(int versionCode, String downloadUrl) {
         UpdateDialog dialog = new UpdateDialog();
         dialog.versionCode = versionCode;
         dialog.downloadUrl = downloadUrl;
+        return dialog;
+    }
+
+    public static UpdateDialog install(File apk) {
+        UpdateDialog dialog = new UpdateDialog();
+        dialog.cachedApk = apk;
         return dialog;
     }
 
@@ -54,8 +60,11 @@ public class UpdateDialog extends BaseDialog {
 
     @Override
     protected void initView() {
-        mBinding.version.setText(getString(R.string.update_version, String.valueOf(versionCode)));
-        mBinding.desc.setText(R.string.update_downloading);
+        if (cachedApk != null) {
+            showInstallReady();
+        } else {
+            mBinding.version.setText(getString(R.string.update_version, String.valueOf(versionCode)));
+        }
     }
 
     @Override
@@ -65,21 +74,49 @@ public class UpdateDialog extends BaseDialog {
     }
 
     private void onConfirm(View view) {
+        if (cachedApk != null) {
+            installApk(cachedApk);
+            return;
+        }
+        startDownload();
+    }
+
+    private void showInstallReady() {
+        mBinding.version.setText(getString(R.string.update_version, String.valueOf(Setting.getUpdateVersion())));
+        mBinding.desc.setText(R.string.update_ready);
+        mBinding.desc.setVisibility(View.VISIBLE);
+        mBinding.confirm.setText(R.string.update_confirm);
+        mBinding.cancel.setVisibility(View.VISIBLE);
+    }
+
+    private void startDownload() {
+        mBinding.cancel.setVisibility(View.GONE);
         mBinding.confirm.setEnabled(false);
-        mBinding.cancel.setEnabled(false);
+        setCancelable(false);
+        mBinding.desc.setVisibility(View.VISIBLE);
+        mBinding.progress.setVisibility(View.VISIBLE);
+        mBinding.progress.setProgress(0);
         mBinding.desc.setText(R.string.update_downloading);
+
         Task.submit(() -> {
             try {
-                downloadedApk = downloadApk(downloadUrl);
+                File apk = downloadApk(downloadUrl);
+                Setting.putUpdateVersion(versionCode);
+                Setting.putUpdateApk(apk.getAbsolutePath());
+                cachedApk = apk;
                 App.post(() -> {
-                    dismiss();
-                    installApk(downloadedApk);
+                    setCancelable(true);
+                    mBinding.cancel.setVisibility(View.VISIBLE);
+                    mBinding.confirm.setEnabled(true);
+                    mBinding.desc.setText(R.string.update_installing);
+                    installApk(apk);
                 });
             } catch (Exception e) {
                 App.post(() -> {
                     mBinding.desc.setText(R.string.update_download_fail);
+                    mBinding.cancel.setVisibility(View.VISIBLE);
                     mBinding.confirm.setEnabled(true);
-                    mBinding.cancel.setEnabled(true);
+                    setCancelable(true);
                 });
             }
         });
@@ -95,16 +132,27 @@ public class UpdateDialog extends BaseDialog {
         Request request = new Request.Builder().url(url).build();
         File dir = new File(Path.cache(), "update");
         dir.mkdirs();
-        File apk = new File(dir, "latest.apk");
+        File apk = new File(dir, versionCode + ".apk");
 
-        try (Response response = downloadClient.newCall(request).execute()) {
+        Call call = downloadClient.newCall(request);
+        try (Response response = call.execute()) {
             if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
+            long contentLength = response.body().contentLength();
             try (InputStream is = response.body().byteStream();
                  FileOutputStream os = new FileOutputStream(apk)) {
                 byte[] buffer = new byte[8192];
+                long total = 0;
                 int len;
                 while ((len = is.read(buffer)) != -1) {
                     os.write(buffer, 0, len);
+                    total += len;
+                    if (contentLength > 0) {
+                        int percent = (int) (total * 100 / contentLength);
+                        App.post(() -> {
+                            mBinding.progress.setProgress(percent);
+                            mBinding.desc.setText(getString(R.string.update_downloading) + " " + percent + "%");
+                        });
+                    }
                 }
             }
         }
@@ -128,5 +176,10 @@ public class UpdateDialog extends BaseDialog {
         Uri uri = FileUtil.getShareUri(apk);
         intent.setDataAndType(uri, "application/vnd.android.package-archive");
         activity.startActivity(intent);
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
     }
 }

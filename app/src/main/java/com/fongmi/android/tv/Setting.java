@@ -178,6 +178,22 @@ public class Setting {
         Prefers.put("update", update);
     }
 
+    public static int getUpdateVersion() {
+        return Prefers.getInt("update_version", 0);
+    }
+
+    public static void putUpdateVersion(int version) {
+        Prefers.put("update_version", version);
+    }
+
+    public static String getUpdateApk() {
+        return Prefers.getString("update_apk");
+    }
+
+    public static void putUpdateApk(String path) {
+        Prefers.put("update_apk", path);
+    }
+
     public static boolean isCaption() {
         return Prefers.getBoolean("caption");
     }

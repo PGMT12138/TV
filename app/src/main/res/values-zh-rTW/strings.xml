@@ -142,6 +142,8 @@
     <string name="update_downloading">正在下載…</string>
     <string name="update_download_fail">下載失敗</string>
     <string name="update_no_manage">請先設定管理地址</string>
+    <string name="update_installing">正在安裝…</string>
+    <string name="update_ready">已下載完成，點擊安裝</string>
 
     <!-- Crash -->
     <string name="crash_info">發生意外錯誤\n抱歉給您帶來不便</string>

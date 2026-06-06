@@ -273,14 +273,21 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
                 String url = baseUrl + "api/update/tv";
                 String json = OkHttp.string(url);
                 com.google.gson.JsonObject obj = Json.parse(json).getAsJsonObject();
-                int version = obj.get("version").getAsInt();
+                int serverVersion = obj.get("version").getAsInt();
                 String apkUrl = obj.get("url").getAsString();
+                int currentVersion = BuildConfig.VERSION_CODE;
                 App.post(() -> {
                     Notify.dismiss();
-                    if (version > BuildConfig.VERSION_CODE) {
-                        UpdateDialog.create(version, apkUrl).show(getSupportFragmentManager(), "update");
-                    } else {
+                    if (serverVersion <= currentVersion) {
                         Notify.show(R.string.update_latest);
+                        return;
+                    }
+                    int cachedVersion = Setting.getUpdateVersion();
+                    String cachedPath = Setting.getUpdateApk();
+                    if (cachedVersion == serverVersion && cachedPath != null && new java.io.File(cachedPath).exists()) {
+                        UpdateDialog.install(new java.io.File(cachedPath)).show(getSupportFragmentManager(), "update");
+                    } else {
+                        UpdateDialog.create(serverVersion, apkUrl).show(getSupportFragmentManager(), "update");
                     }
                 });
             } catch (Exception e) {
