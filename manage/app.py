@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from database import (init_db, get_urls, get_all_urls, add_url, update_url, delete_url, delete_urls_batch,
+                      get_app_version, set_app_version,
                       upsert_home_content, get_home_contents, get_home_content, delete_home_content,
                       delete_home_contents_batch,
                       upsert_video, get_videos, get_video, delete_video, delete_videos_batch)
@@ -247,6 +248,28 @@ class BatchIds(BaseModel):
 async def batch_remove_urls(item: BatchIds):
     delete_urls_batch(item.ids)
     return {"ok": True, "deleted": len(item.ids)}
+
+
+class AppVersionUpdate(BaseModel):
+    version: int
+    url: str
+
+
+@app.get("/api/update/{platform}")
+async def get_update(platform: str):
+    if platform not in ("mobile", "tv"):
+        return {"version": 0, "url": ""}
+    row = get_app_version(platform)
+    if row is None:
+        return {"version": 0, "url": ""}
+    return {"version": row["version"], "url": row["url"]}
+
+
+@app.put("/api/update/{platform}")
+async def set_update(platform: str, item: AppVersionUpdate):
+    if platform not in ("mobile", "tv"):
+        return {"ok": False, "error": "Invalid platform"}
+    return set_app_version(platform, item.version, item.url)
 
 
 class HomeContentUpload(BaseModel):

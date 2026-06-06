@@ -746,6 +746,64 @@
         .url-item, .video-card {
             animation: fadeUp 0.3s var(--ease) both;
         }
+
+        /* Version panel */
+        .version-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 16px;
+        }
+        .version-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+        }
+        .version-card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .version-card-icon { font-size: 22px; }
+        .version-card-title { font-size: 15px; font-weight: 600; color: var(--text); }
+        .version-card label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .version-card input {
+            width: 100%;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--surface-hover);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 13px;
+            transition: all 0.2s var(--ease);
+        }
+        .version-card input:focus {
+            outline: none;
+            border-color: var(--border-active);
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.06);
+        }
+        .version-card-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        @media (max-width: 767px) {
+            .version-cards { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -764,6 +822,7 @@
                 <div class="tab" data-type="1" onclick="switchTab(1)">Live</div>
                 <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
                 <div class="tab" data-type="3" onclick="switchTab(3)">播放记录</div>
+                <div class="tab" data-type="4" onclick="switchTab(4)">版本管理</div>
             </div>
         </div>
 
@@ -795,6 +854,34 @@
             <select id="videoSiteFilter" onchange="applyVideoFilter()"><option value="">全部来源</option></select>
         </div>
         <div class="video-grid" id="videoGrid"></div>
+        <div class="version-panel" id="versionPanel" style="display:none">
+            <div class="version-cards">
+                <div class="version-card">
+                    <div class="version-card-header">
+                        <span class="version-card-icon">📱</span>
+                        <span class="version-card-title">Mobile</span>
+                    </div>
+                    <label>版本号 (versionCode)</label>
+                    <input type="number" id="versionMobile" placeholder="例如 550">
+                    <label>APK 下载地址</label>
+                    <input type="text" id="urlMobile" placeholder="https://example.com/latest-mobile.apk">
+                    <div class="version-card-meta" id="metaMobile"></div>
+                    <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveVersion('mobile')">保存</button>
+                </div>
+                <div class="version-card">
+                    <div class="version-card-header">
+                        <span class="version-card-icon">📺</span>
+                        <span class="version-card-title">TV (Leanback)</span>
+                    </div>
+                    <label>版本号 (versionCode)</label>
+                    <input type="number" id="versionTv" placeholder="例如 550">
+                    <label>APK 下载地址</label>
+                    <input type="text" id="urlTv" placeholder="https://example.com/latest-tv.apk">
+                    <div class="version-card-meta" id="metaTv"></div>
+                    <button class="btn btn-primary" style="margin-top:10px;width:100%" onclick="saveVersion('tv')">保存</button>
+                </div>
+            </div>
+        </div>
         <div class="empty" id="empty" style="display:none">暂无数据</div>
     </div>
 
@@ -815,6 +902,10 @@
         <button class="bottom-tab" data-type="3" onclick="switchTab(3)">
             <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/><rect x="1" y="1" width="4" height="22" rx="1"/></svg>
             记录
+        </button>
+        <button class="bottom-tab" data-type="4" onclick="switchTab(4)">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>
+            版本
         </button>
     </div>
 
@@ -880,13 +971,15 @@
             addBar.style.display = type >= 2 ? 'none' : 'flex';
             document.getElementById('testAllBtn').style.display = type >= 2 ? 'none' : '';
             filterBar.classList.toggle('show', type === 2);
-            document.getElementById('batchBar').classList.toggle('show', true);
+            document.getElementById('batchBar').classList.toggle('show', type < 4);
             document.getElementById('batchTestBtn').style.display = type < 2 ? '' : 'none';
             videoBar.classList.toggle('show', type === 3);
-            urlList.style.display = type === 3 ? 'none' : '';
+            urlList.style.display = type === 3 || type === 4 ? 'none' : '';
             videoGrid.classList.toggle('show', type === 3);
+            document.getElementById('versionPanel').style.display = type === 4 ? '' : 'none';
             if (type === 2) loadHomeContents();
             else if (type === 3) loadVideos();
+            else if (type === 4) loadVersions();
             else loadUrls();
             document.getElementById('selectAll').checked = false;
             document.getElementById('selectAll').indeterminate = false;
@@ -1571,6 +1664,43 @@
             if (!confirm('确定删除此记录？')) return;
             await fetch(`api/videos/${id}`, {method: 'DELETE'});
             await loadVideos();
+        }
+
+        // --- Version Management ---
+        async function loadVersions() {
+            for (const platform of ['mobile', 'tv']) {
+                try {
+                    const resp = await fetch(`api/update/${platform}`);
+                    const data = await resp.json();
+                    const key = platform === 'mobile' ? 'Mobile' : 'Tv';
+                    document.getElementById('version' + key).value = data.version || '';
+                    document.getElementById('url' + key).value = data.url || '';
+                    document.getElementById('meta' + key).textContent = data.version ? `当前版本: ${data.version}` : '未设置';
+                } catch(e) {
+                    const key = platform === 'mobile' ? 'Mobile' : 'Tv';
+                    document.getElementById('meta' + key).textContent = '加载失败';
+                }
+            }
+        }
+
+        async function saveVersion(platform) {
+            const key = platform === 'mobile' ? 'Mobile' : 'Tv';
+            const version = parseInt(document.getElementById('version' + key).value);
+            const url = document.getElementById('url' + key).value.trim();
+            if (!url) { alert('请填写 APK 下载地址'); return; }
+            if (isNaN(version) || version <= 0) { alert('请填写有效的版本号'); return; }
+            try {
+                await fetch(`api/update/${platform}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({version, url})
+                });
+                document.getElementById('meta' + key).textContent = `已保存 · 版本: ${version}`;
+                document.getElementById('meta' + key).style.color = 'var(--accent)';
+                setTimeout(() => { document.getElementById('meta' + key).style.color = ''; }, 2000);
+            } catch(e) {
+                alert('保存失败: ' + e.message);
+            }
         }
 
         switchTab(0);

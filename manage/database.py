@@ -17,6 +17,14 @@ def get_conn():
 def init_db():
     conn = get_conn()
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_versions (
+            platform TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS urls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type INTEGER NOT NULL,
@@ -146,6 +154,26 @@ def delete_urls_batch(row_ids: list[int]):
     conn.execute(f"DELETE FROM urls WHERE id IN ({placeholders})", row_ids)
     conn.commit()
     conn.close()
+
+
+def get_app_version(platform: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT platform, version, url, updated_at FROM app_versions WHERE platform = ?", (platform,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def set_app_version(platform: str, version: int, url: str) -> dict:
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO app_versions (platform, version, url, updated_at) VALUES (?, ?, ?, ?)",
+        (platform, version, url, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT platform, version, url, updated_at FROM app_versions WHERE platform = ?", (platform,)).fetchone()
+    conn.close()
+    return dict(row)
 
 
 def upsert_home_content(site_key: str, site_name: str, config_name: str, content: str) -> dict:

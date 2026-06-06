@@ -9,6 +9,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.viewbinding.ViewBinding;
 
+import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.BuildConfig;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
@@ -31,6 +32,7 @@ import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.ConfigDialog;
 import com.fongmi.android.tv.ui.dialog.DohDialog;
 import com.fongmi.android.tv.ui.dialog.HistoryDialog;
+import com.fongmi.android.tv.ui.dialog.UpdateDialog;
 import com.fongmi.android.tv.ui.dialog.LiveDialog;
 import com.fongmi.android.tv.ui.dialog.RestoreDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
@@ -39,8 +41,10 @@ import com.fongmi.android.tv.utils.FileUtil;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
 import com.fongmi.android.tv.utils.ResUtil;
+import com.fongmi.android.tv.utils.Task;
 import com.github.catvod.bean.Doh;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Path;
 
 import org.greenrobot.eventbus.Subscribe;
@@ -255,6 +259,37 @@ public class SettingActivity extends BaseActivity implements ConfigCallback, Sit
     }
 
     private void onVersion(View view) {
+        Config manageConfig = Config.manage();
+        if (manageConfig.isEmpty()) {
+            Notify.show(R.string.update_no_manage);
+            return;
+        }
+        Notify.progress(this);
+        Task.submit(() -> {
+            try {
+                String baseUrl = manageConfig.getUrl();
+                if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
+                if (!baseUrl.endsWith("/")) baseUrl = baseUrl + "/";
+                String url = baseUrl + "api/update/tv";
+                String json = OkHttp.string(url);
+                com.google.gson.JsonObject obj = Json.parse(json).getAsJsonObject();
+                int version = obj.get("version").getAsInt();
+                String apkUrl = obj.get("url").getAsString();
+                App.post(() -> {
+                    Notify.dismiss();
+                    if (version > BuildConfig.VERSION_CODE) {
+                        UpdateDialog.create(version, apkUrl).show(getSupportFragmentManager(), "update");
+                    } else {
+                        Notify.show(R.string.update_latest);
+                    }
+                });
+            } catch (Exception e) {
+                App.post(() -> {
+                    Notify.dismiss();
+                    Notify.show(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                });
+            }
+        });
     }
 
     private void setWallDefault(View view) {
