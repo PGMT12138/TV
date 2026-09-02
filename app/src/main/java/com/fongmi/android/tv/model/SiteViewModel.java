@@ -77,11 +77,7 @@ public class SiteViewModel extends ViewModel {
 
     public void homeContent() {
         Site home = VodConfig.get().getHome();
-        execute(TaskType.RESULT, result, () -> {
-            Result r = SiteApi.homeContent(home);
-            SiteApi.uploadAllHomeContents(home, r);
-            return r;
-        });
+        execute(TaskType.RESULT, result, () -> SiteApi.homeContent(home));
     }
 
     public void categoryContent(String key, String tid, String page, boolean filter, HashMap<String, String> extend) {

@@ -8,3 +8,6 @@
 *.properties
 lib-*.aar
 /Release
+manage/static/
+.zcode/
+manage/.venv/

@@ -84,6 +84,7 @@ public class App extends Application implements Application.ActivityLifecycleCal
         Notify.createChannel();
         registerActivityLifecycleCallbacks(this);
         installSpiderCrashGuard();
+        com.fongmi.android.tv.server.Bridge.get().start();
     }
 
     private void installSpiderCrashGuard() {

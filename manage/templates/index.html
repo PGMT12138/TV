@@ -804,6 +804,101 @@
         @media (max-width: 767px) {
             .version-cards { grid-template-columns: 1fr; }
         }
+
+        /* Device panel */
+        .device-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .device-section-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .device-section-sub { font-size: 12px; color: var(--text-muted); margin: 4px 0 16px; }
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+        .device-card {
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            animation: fadeUp 0.3s var(--ease) both;
+        }
+        .device-card.active-src { border-color: rgba(52, 211, 153, 0.4); }
+        .device-head { display: flex; align-items: center; gap: 8px; }
+        .device-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--danger); flex-shrink: 0;
+        }
+        .device-dot.online { background: var(--accent); box-shadow: 0 0 8px rgba(52, 211, 153, 0.5); }
+        .device-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .device-badge {
+            margin-left: auto; flex-shrink: 0;
+            font-size: 10px; padding: 2px 8px; border-radius: 999px;
+            background: var(--accent-dim); color: var(--accent); font-weight: 600;
+        }
+        .device-meta { font-size: 11px; color: var(--text-muted); line-height: 1.7; }
+        .device-actions { display: flex; gap: 8px; margin-top: 4px; }
+        .site-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+        .site-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
+            background: var(--surface-hover);
+        }
+        .site-row.disabled { opacity: 0.55; }
+        .site-info { flex: 1; min-width: 0; }
+        .site-name { font-size: 13px; font-weight: 600; color: var(--text); }
+        .site-key {
+            font-size: 11px; color: var(--text-muted); font-family: monospace;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .site-stats { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+        @media (max-width: 767px) {
+            .device-grid { grid-template-columns: 1fr; }
+            .site-row { flex-wrap: wrap; }
+        }
+
+        /* User panel */
+        .user-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
+            background: var(--surface-hover);
+        }
+        .user-avatar {
+            width: 36px; height: 36px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 50%;
+            background: var(--accent-dim); color: var(--accent);
+            font-size: 15px; font-weight: 600;
+        }
+        .user-info { flex: 1; min-width: 0; }
+        .user-name { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+        .user-online {
+            font-size: 10px; padding: 1px 8px; border-radius: 999px;
+            background: var(--accent-dim); color: var(--accent); font-weight: 600;
+        }
+        .user-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+        .user-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+        @media (max-width: 767px) {
+            .user-row { flex-wrap: wrap; }
+        }
     </style>
 </head>
 <body>
@@ -823,6 +918,10 @@
                 <div class="tab" data-type="2" onclick="switchTab(2)">首页数据</div>
                 <div class="tab" data-type="3" onclick="switchTab(3)">播放记录</div>
                 <div class="tab" data-type="4" onclick="switchTab(4)">版本管理</div>
+                <div class="tab" data-type="5" onclick="switchTab(5)">设备</div>
+                <div class="tab" data-type="6" onclick="switchTab(6)">用户</div>
+                <div class="tab" data-type="7" onclick="switchTab(7)">搜索站点</div>
+                <div class="tab" data-type="8" onclick="switchTab(8)">直播源</div>
             </div>
         </div>
 
@@ -882,6 +981,42 @@
                 </div>
             </div>
         </div>
+        <div id="devicePanel" style="display:none">
+            <div class="device-section">
+                <div class="device-section-title">📱 桥接设备</div>
+                <div class="device-section-sub">APP 端经设置页配置的 manage 地址接入；选择一台<b>已连接</b>设备作为视频网站（/cine）的搜索解析来源</div>
+                <div class="device-grid" id="deviceGrid"></div>
+            </div>
+        </div>
+        <div id="searchPanel" style="display:none">
+            <div class="device-section">
+                <div class="device-section-title">🔍 搜索站点</div>
+                <div class="device-section-sub">视频网站每次搜索时自动登记参与站点；禁用为<b>全局配置</b>，对所有设备及所有搜索生效</div>
+                <div class="site-toolbar">
+                    <button class="btn btn-sm btn-test" onclick="setAllSearchSites(false)">全部启用</button>
+                    <button class="btn btn-sm btn-batch-del" onclick="setAllSearchSites(true)">全部禁用</button>
+                </div>
+                <div id="siteList"></div>
+            </div>
+        </div>
+        <div id="liveSrcPanel" style="display:none">
+            <div class="device-section">
+                <div class="device-section-title">📺 直播源</div>
+                <div class="device-section-sub">视频网站拉取频道表时自动登记全部直播源；禁用后该源<b>不再出现在 /cine 直播源选择器</b>（默认源被禁用时页面自动切到第一个可用源）</div>
+                <div class="site-toolbar">
+                    <button class="btn btn-sm btn-test" onclick="setAllLiveSources(false)">全部启用</button>
+                    <button class="btn btn-sm btn-batch-del" onclick="setAllLiveSources(true)">全部禁用</button>
+                </div>
+                <div id="liveSourceList"></div>
+            </div>
+        </div>
+        <div id="userPanel" style="display:none">
+            <div class="device-section">
+                <div class="device-section-title">👥 网站注册用户</div>
+                <div class="device-section-sub">视频网站（/cine）的注册用户；删除会同时清理其收藏、观看历史与登录会话</div>
+                <div id="userList"></div>
+            </div>
+        </div>
         <div class="empty" id="empty" style="display:none">暂无数据</div>
     </div>
 
@@ -906,6 +1041,22 @@
         <button class="bottom-tab" data-type="4" onclick="switchTab(4)">
             <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>
             版本
+        </button>
+        <button class="bottom-tab" data-type="5" onclick="switchTab(5)">
+            <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+            设备
+        </button>
+        <button class="bottom-tab" data-type="6" onclick="switchTab(6)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            用户
+        </button>
+        <button class="bottom-tab" data-type="7" onclick="switchTab(7)">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            搜索站点
+        </button>
+        <button class="bottom-tab" data-type="8" onclick="switchTab(8)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg>
+            直播源
         </button>
     </div>
 
@@ -974,13 +1125,36 @@
             document.getElementById('batchBar').classList.toggle('show', type < 4);
             document.getElementById('batchTestBtn').style.display = type < 2 ? '' : 'none';
             videoBar.classList.toggle('show', type === 3);
-            urlList.style.display = type === 3 || type === 4 ? 'none' : '';
+            urlList.style.display = type >= 3 ? 'none' : '';
             videoGrid.classList.toggle('show', type === 3);
             document.getElementById('versionPanel').style.display = type === 4 ? '' : 'none';
-            if (type === 2) loadHomeContents();
-            else if (type === 3) loadVideos();
-            else if (type === 4) loadVersions();
-            else loadUrls();
+            document.getElementById('devicePanel').style.display = type === 5 ? '' : 'none';
+            document.getElementById('userPanel').style.display = type === 6 ? '' : 'none';
+            document.getElementById('searchPanel').style.display = type === 7 ? '' : 'none';
+            document.getElementById('liveSrcPanel').style.display = type === 8 ? '' : 'none';
+            if (type === 5) {
+                document.getElementById('empty').style.display = 'none';
+                loadDevices();
+                startDevicePolling();
+            } else if (type === 6) {
+                document.getElementById('empty').style.display = 'none';
+                stopDevicePolling();
+                loadUsers();
+            } else if (type === 7) {
+                document.getElementById('empty').style.display = 'none';
+                stopDevicePolling();
+                loadSearchSites();
+            } else if (type === 8) {
+                document.getElementById('empty').style.display = 'none';
+                stopDevicePolling();
+                loadLiveSources();
+            } else {
+                stopDevicePolling();
+                if (type === 2) loadHomeContents();
+                else if (type === 3) loadVideos();
+                else if (type === 4) loadVersions();
+                else loadUrls();
+            }
             document.getElementById('selectAll').checked = false;
             document.getElementById('selectAll').indeterminate = false;
             document.getElementById('batchCount').textContent = '';
@@ -1700,6 +1874,243 @@
                 setTimeout(() => { document.getElementById('meta' + key).style.color = ''; }, 2000);
             } catch(e) {
                 alert('保存失败: ' + e.message);
+            }
+        }
+
+        // ---------------- 设备与搜索站点管理 ----------------
+        let deviceTimer = null;
+
+        function startDevicePolling() {
+            stopDevicePolling();
+            deviceTimer = setInterval(loadDevices, 5000);
+        }
+
+        function stopDevicePolling() {
+            if (deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
+        }
+
+        function fmtTime(iso) {
+            return iso ? iso.replace('T', ' ').slice(0, 16) : '-';
+        }
+
+        async function loadDevices() {
+            let data;
+            try {
+                data = await (await fetch('api/devices')).json();
+            } catch(e) { return; }
+            const grid = document.getElementById('deviceGrid');
+            grid.innerHTML = '';
+            if (!data.devices.length) {
+                grid.innerHTML = '<div class="device-section-sub">暂无设备记录，APP 在设置页配置 manage 地址后会自动接入</div>';
+                return;
+            }
+            data.devices.forEach(d => {
+                const isActive = d.id === data.active_id;
+                const card = document.createElement('div');
+                card.className = 'device-card' + (isActive ? ' active-src' : '');
+                card.innerHTML = `
+                    <div class="device-head">
+                        <span class="device-dot ${d.online ? 'online' : ''}"></span>
+                        <span class="device-name" title="${esc(d.name)}">${esc(d.name || '未命名设备')}</span>
+                        ${isActive ? '<span class="device-badge">当前来源</span>' : ''}
+                    </div>
+                    <div class="device-meta">
+                        版本 ${esc(d.version || '-')} · ID ${esc(d.id.slice(0, 8))}<br>
+                        首次连接 ${esc(fmtTime(d.first_seen_at))} · 最近连接 ${esc(fmtTime(d.last_seen_at))}
+                    </div>
+                `;
+                const actions = document.createElement('div');
+                actions.className = 'device-actions';
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-sm btn-test';
+                btn.textContent = isActive ? (d.online ? '当前来源' : '等待重连') : '设为搜索来源';
+                btn.disabled = !d.online || isActive;
+                btn.onclick = () => selectDevice(d.id);
+                actions.appendChild(btn);
+                card.appendChild(actions);
+                grid.appendChild(card);
+            });
+        }
+
+        async function selectDevice(id) {
+            try {
+                const data = await (await fetch('api/devices/select', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id})
+                })).json();
+                if (data.error) { alert(data.error); return; }
+                loadDevices();
+            } catch(e) {
+                alert('选择失败: ' + e.message);
+            }
+        }
+
+        async function loadSearchSites() {
+            let data;
+            try {
+                data = await (await fetch('api/search-sites')).json();
+            } catch(e) { return; }
+            const list = document.getElementById('siteList');
+            list.innerHTML = '';
+            if (!data.sites.length) {
+                list.innerHTML = '<div class="device-section-sub">暂无记录，视频网站发起搜索后会自动登记参与站点</div>';
+                return;
+            }
+            data.sites.forEach(s => {
+                const row = document.createElement('div');
+                row.className = 'site-row' + (s.disabled ? ' disabled' : '');
+                row.innerHTML = `
+                    <div class="site-info">
+                        <div class="site-name">${esc(s.site_name || s.site_key)}</div>
+                        <div class="site-key" title="${esc(s.site_key)}">${esc(s.site_key)}</div>
+                    </div>
+                    <div class="site-stats">搜索 ${s.search_count} 次 · ${esc(fmtTime(s.last_searched_at))}</div>
+                `;
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-sm btn-toggle' + (s.disabled ? '' : ' active');
+                btn.textContent = s.disabled ? 'OFF' : 'ON';
+                btn.onclick = () => toggleSearchSite(s.site_key, !s.disabled);
+                row.appendChild(btn);
+                list.appendChild(row);
+            });
+        }
+
+        async function toggleSearchSite(key, disabled) {
+            await postSearchSites([key], disabled);
+            loadSearchSites();
+        }
+
+        async function setAllSearchSites(disabled) {
+            await postSearchSites(null, disabled);
+            loadSearchSites();
+        }
+
+        async function postSearchSites(siteKeys, disabled) {
+            try {
+                await fetch('api/search-sites/set', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({site_keys: siteKeys, disabled})
+                });
+            } catch(e) {
+                alert('操作失败: ' + e.message);
+            }
+        }
+
+        // ---------------- 直播源管理 ----------------
+        async function loadLiveSources() {
+            let data;
+            try {
+                data = await (await fetch('api/live-sources')).json();
+            } catch(e) { return; }
+            const list = document.getElementById('liveSourceList');
+            list.innerHTML = '';
+            if (!data.sources.length) {
+                list.innerHTML = '<div class="device-section-sub">暂无记录，视频网站拉取直播频道表后会自动登记全部直播源</div>';
+                return;
+            }
+            data.sources.forEach(s => {
+                const row = document.createElement('div');
+                row.className = 'site-row' + (s.disabled ? ' disabled' : '');
+                row.innerHTML = `
+                    <div class="site-info">
+                        <div class="site-name">${esc(s.name)}</div>
+                        <div class="site-key">首次 ${esc(fmtTime(s.first_seen))} · 最近 ${esc(fmtTime(s.last_seen))}</div>
+                    </div>
+                    <div class="site-stats">${s.disabled ? '已禁用' : '已启用'}</div>
+                `;
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-sm btn-toggle' + (s.disabled ? '' : ' active');
+                btn.textContent = s.disabled ? 'OFF' : 'ON';
+                btn.onclick = () => toggleLiveSource(s.name, !s.disabled);
+                row.appendChild(btn);
+                list.appendChild(row);
+            });
+        }
+
+        async function toggleLiveSource(name, disabled) {
+            await postLiveSources([name], disabled);
+            loadLiveSources();
+        }
+
+        async function setAllLiveSources(disabled) {
+            await postLiveSources(null, disabled);
+            loadLiveSources();
+        }
+
+        async function postLiveSources(names, disabled) {
+            try {
+                await fetch('api/live-sources/set', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({names, disabled})
+                });
+            } catch(e) {
+                alert('操作失败: ' + e.message);
+            }
+        }
+
+        // ---------------- 网站注册用户管理 ----------------
+        async function loadUsers() {
+            let data;
+            try {
+                data = await (await fetch('api/users')).json();
+            } catch(e) { return; }
+            const list = document.getElementById('userList');
+            list.innerHTML = '';
+            if (!data.users.length) {
+                list.innerHTML = '<div class="device-section-sub">暂无注册用户</div>';
+                return;
+            }
+            data.users.forEach(u => {
+                const row = document.createElement('div');
+                row.className = 'user-row';
+                row.innerHTML = `
+                    <div class="user-avatar">${esc((u.username || '?').slice(0, 1).toUpperCase())}</div>
+                    <div class="user-info">
+                        <div class="user-name">${esc(u.username)}${u.active_sessions > 0 ? '<span class="user-online">已登录</span>' : ''}</div>
+                        <div class="user-meta">
+                            注册 ${esc(fmtTime(u.created_at))} · 收藏 ${u.favorites} · 历史 ${u.history_count}
+                            · 观看 ${(u.watch_seconds / 3600).toFixed(1)} 小时
+                        </div>
+                    </div>
+                `;
+                const actions = document.createElement('div');
+                actions.className = 'user-actions';
+                const logoutBtn = document.createElement('button');
+                logoutBtn.className = 'btn btn-sm btn-test';
+                logoutBtn.textContent = '强制下线';
+                logoutBtn.disabled = u.active_sessions === 0;
+                logoutBtn.onclick = () => forceLogoutUser(u.id, u.username);
+                const delBtn = document.createElement('button');
+                delBtn.className = 'btn btn-sm btn-delete';
+                delBtn.textContent = '删除';
+                delBtn.onclick = () => removeUser(u.id, u.username);
+                actions.appendChild(logoutBtn);
+                actions.appendChild(delBtn);
+                row.appendChild(actions);
+                list.appendChild(row);
+            });
+        }
+
+        async function forceLogoutUser(id, name) {
+            if (!confirm(`确定让用户 ${name} 强制下线？其所有登录会话将失效。`)) return;
+            try {
+                await fetch(`api/users/${id}/logout`, {method: 'POST'});
+                loadUsers();
+            } catch(e) {
+                alert('操作失败: ' + e.message);
+            }
+        }
+
+        async function removeUser(id, name) {
+            if (!confirm(`确定删除用户 ${name}？其收藏、观看历史和会话将一并删除，不可恢复。`)) return;
+            try {
+                await fetch(`api/users/${id}`, {method: 'DELETE'});
+                loadUsers();
+            } catch(e) {
+                alert('删除失败: ' + e.message);
             }
         }
 

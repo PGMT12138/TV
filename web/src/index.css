@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+/* 触控模拟环境（如 ZCode 内嵌浏览器：Electron 壳自报 hover:none/pointer:coarse）会让 Tailwind
+   默认包裹 hover/group-hover 的 @media (hover:hover) 永不匹配，全站悬停效果集体失效。
+   这里改写两个变体：仅在 <html> 带 has-mouse 类（main.tsx 检测到真实鼠标输入后添加）时生效——
+   真鼠标环境悬停恢复，真触屏设备不加该类、悬停粘滞问题不回归。 */
+@custom-variant hover (:where(html.has-mouse) &:hover);
+@custom-variant group-hover (:where(html.has-mouse) &:is(:where(.group):hover *));
+
+@layer base {
+  :root {
+    --font-serif: "Instrument Serif", Georgia, serif;
+    --font-sans: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+.font-instrument-serif {
+  font-family: var(--font-serif);
+}
+
+.font-sans-modern {
+  font-family: var(--font-sans);
+}
+
+/* Custom smooth dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* 深色细滚动条（频道列表/节目单用）：标准属性生效于 Firefox 与 Chromium 121+
+   （标准属性设置后优先于 webkit 伪元素），webkit 伪元素兜底旧内核，轨道透明融入面板底色 */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Reference blur-fade entrance animations */
+@keyframes fadeInSlideBlur {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0px);
+  }
+}
+
+.animate-fade-blur {
+  animation: fadeInSlideBlur 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 播放器音量滑杆：默认无圆点，悬停/拖动/键盘聚焦时才浮现 */
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #34d399;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 9999px;
+  background: #34d399;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.group\/volume:hover .volume-slider::-webkit-slider-thumb,
+.group\/volume:active .volume-slider::-webkit-slider-thumb,
+.volume-slider:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.group\/volume:hover .volume-slider::-moz-range-thumb,
+.group\/volume:active .volume-slider::-moz-range-thumb,
+.volume-slider:focus-visible::-moz-range-thumb {
+  opacity: 1;
+}

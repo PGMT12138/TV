@@ -1,0 +1,699 @@
+"""智能选源探测引擎。
+
+对「站点×线路」候选逐个轻量探测，量化四个维度：
+- 速度：playerContent 解析耗时 + 播放列表首字节时间 + 首个分片吞吐，合成首帧估计；
+- 清晰度：m3u8 master 的 RESOLUTION 优先，否则下载首个分片用 ffprobe 读宽高（未装 ffprobe 则未知）；
+- 广告：前置贴片 + 中段拼接启发式（前/中部分片时长离群聚类、首段异域、DISCONTINUITY 拼接缝、
+  重定向广告域、双帧角标静止检测），输出 clean / suspect / dirty 三级 + 证据文案，只标记不剥离；
+- 时长：m3u8 分片 EXTINF 求和，与片库片长（ref_s）交叉比对，短/长异常参与评分。
+
+取流走与 /stream 相同的两条路径（httpx 直连回源 / 经设备 fetch 转发），探测出的速度即网页观看的真实速度。
+结果缓存 probe_cache（TTL 6h），每次探测滚动写入 site_stats，站点历史广告率作为排序先验。
+"""
+import asyncio
+import collections
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import time
+from urllib.parse import urljoin, urlparse
+
+import httpx
+
+from database import get_conn
+from bridge import active_device, call_device, _ids
+
+PROBE_TTL = 6 * 3600          # 探测结果缓存时长：采集站源时效性强
+PLAYER_TIMEOUT = 25.0         # playerContent 最长等待（含 WebView 嗅探/网盘转存）
+FETCH_TIMEOUT = 15.0
+DETAIL_TIMEOUT = 20.0
+DETAIL_CONCURRENCY = 3        # 并发过高会压垮设备爬虫（QuickJS/Chaquopy 高负载）导致桥接心跳超时断开
+PROBE_CONCURRENCY = 4
+RECONNECT_WAIT = 90.0         # 设备掉线后等待桥接重连的上限（App 侧重连退避最长 60s）
+FLAGS_PER_SITE = 8            # 每站点最多探测的线路数（同站线路多为同一上游，全探浪费且压垮设备爬虫）
+PLAYLIST_CAP = 2 * 1024 * 1024
+SEGMENT_CAP = 1536 * 1024
+TMP_DIR = os.path.join(os.path.dirname(__file__), "data", "tmp")
+
+FFPROBE = shutil.which("ffprobe")
+FFMPEG = shutil.which("ffmpeg")
+
+# 广告/统计域特征（hostname 子串匹配，仅作为信号之一，单信号只判 suspect）
+AD_HOST_TOKENS = ("doubleclick", "googlesyndication", "popads", "cnzz", "umeng", "51.la",
+                  "adserver", "adsystem", "adplus", "tracking", "analytics", "beacon")
+
+AD_RANK = {"clean": 0, "suspect": 1, "dirty": 2}
+FILE_EXTS = (".mp4", ".mkv", ".flv", ".avi", ".mov", ".m4v", ".ts", ".mp3", ".m4a")
+
+_ATTR_RE = re.compile(r"([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)")
+
+
+class ScanTask:
+    """一次扫描：events 为已产生事件（SSE 重连重放用，消费端按 key 幂等合并），queue 供实时消费。"""
+
+    def __init__(self):
+        self.events: list[dict] = []
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.done = False
+        self.created = time.time()
+
+
+_scans: dict[str, ScanTask] = {}
+_client = None
+
+
+def _emit(task: ScanTask, ev: dict):
+    task.events.append(ev)
+    task.queue.put_nowait(ev)
+
+
+def _cleanup_scans():
+    for sid in [k for k, v in _scans.items() if time.time() - v.created > 1800]:
+        _scans.pop(sid, None)
+
+
+async def _call_device_wait(action: str, params: dict, timeout: float) -> dict:
+    """设备掉线（爬虫高负载下桥接可能闪断重连）时等它回来再重试一次。"""
+    for attempt in range(2):
+        try:
+            return await call_device(action, params, timeout=timeout)
+        except RuntimeError as e:
+            if attempt or "设备未连接" not in str(e):
+                raise
+            deadline = time.monotonic() + RECONNECT_WAIT
+            dev = active_device()
+            while time.monotonic() < deadline and (dev is None or not dev.online):
+                await asyncio.sleep(5)
+                dev = active_device()
+            if dev is None or not dev.online:
+                raise
+
+
+async def start_scan(matches: list[dict], ref_s: float | None = None) -> str:
+    """matches: [{key, id, name}]，已按匹配分排序、按站点去重；ref_s 为片库片长（秒），供时长交叉比对。"""
+    scan_id = secrets.token_hex(8)
+    task = ScanTask()
+    _scans[scan_id] = task
+    _cleanup_scans()
+    asyncio.get_event_loop().create_task(_run_scan(task, matches, ref_s))
+    return scan_id
+
+
+def get_scan(scan_id: str) -> ScanTask | None:
+    return _scans.get(scan_id)
+
+
+# ---------------- 取流（与 /stream 同路径：直连 / 经设备） ----------------
+
+def _is_local(url: str) -> bool:
+    try:
+        return (urlparse(url).hostname or "") in ("127.0.0.1", "localhost")
+    except Exception:
+        return False
+
+
+def _http_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(12.0, read=20.0),
+                                    limits=httpx.Limits(max_connections=PROBE_CONCURRENCY * 2))
+    return _client
+
+
+async def _fetch(url: str, headers: dict, cap: int, local: bool = False,
+                 timeout: float = FETCH_TIMEOUT) -> dict:
+    """有界下载，客户端读满 cap 即断开。返回 {status, ctype, data, ttfb, elapsed, redirects, url}，
+    url 为跟随重定向后的最终地址——播放列表内的相对路径必须以它为基准拼接（php 入口 302 到 CDN
+    时用入口地址作基准必 404）。直连路径不发 Range 头：直播 CDN（如咪咕 gslb）对 Range 请求回
+    502，且播放列表/直播流是动态内容本无 Range 语义，有界统一由客户端断流保证；经设备路径保留
+    range 参数（设备端无客户端截断，靠它限制设备侧下载量）。"""
+    if local:
+        dev = active_device()
+        if dev is None or not dev.online:
+            raise RuntimeError("设备未连接")
+        rid = next(_ids)
+        q: asyncio.Queue = asyncio.Queue()
+        dev.streams[rid] = q
+        try:
+            t0 = time.monotonic()
+            await dev.ws.send_json({"id": rid, "action": "fetch", "params": {
+                "url": url, "headers": headers,
+                "range": f"bytes=0-{cap - 1}" if cap else ""}})
+            meta = await asyncio.wait_for(q.get(), timeout=timeout)
+            if not isinstance(meta, dict) or meta.get("type") != "meta":
+                raise RuntimeError(meta.get("error", "设备取流失败") if isinstance(meta, dict) else "设备取流失败")
+            ttfb = time.monotonic() - t0
+            status = int(meta.get("status", 200))
+            mh = meta.get("headers") or {}
+            ctype = mh.get("Content-Type") or mh.get("content-type") or ""
+            parts, total = [], 0
+            while total < cap:
+                item = await asyncio.wait_for(q.get(), timeout=timeout)
+                if item is None or isinstance(item, dict):
+                    break
+                parts.append(item)
+                total += len(item)
+            return {"status": status, "ctype": ctype, "data": b"".join(parts)[:cap],
+                    "ttfb": ttfb, "elapsed": time.monotonic() - t0, "redirects": [],
+                    "url": meta.get("url") or url}
+        finally:
+            dev.streams.pop(rid, None)
+    client = _http_client()
+    t0 = time.monotonic()
+    resp = await client.send(client.build_request("GET", url, headers=dict(headers)), stream=True)
+    try:
+        ttfb = time.monotonic() - t0
+        parts, total = [], 0
+        async for chunk in resp.aiter_bytes(65536):
+            parts.append(chunk)
+            total += len(chunk)
+            if total >= cap:
+                break
+        return {"status": resp.status_code, "ctype": resp.headers.get("content-type", ""),
+                "data": b"".join(parts)[:cap], "ttfb": ttfb, "elapsed": time.monotonic() - t0,
+                "redirects": [str(r.url.host) for r in resp.history], "url": str(resp.url)}
+    finally:
+        await resp.aclose()
+
+
+# ---------------- m3u8 解析与广告启发式 ----------------
+
+def _parse_playlist(text: str):
+    """返回 (variants, segments)。variant: {url, bandwidth, resolution}；segment: {url, duration, disc}。"""
+    variants, segments = [], []
+    pending_dur, pending_variant, disc = None, None, False
+    for raw in text.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-STREAM-INF"):
+            attrs = {k: v.strip('"') for k, v in _ATTR_RE.findall(line)}
+            pending_variant = {"bandwidth": int(attrs.get("BANDWIDTH") or 0),
+                               "resolution": attrs.get("RESOLUTION", "")}
+        elif line.startswith("#EXTINF:"):
+            try:
+                pending_dur = float(line.split(":", 1)[1].split(",", 1)[0])
+            except ValueError:
+                pending_dur = None
+        elif line.startswith("#EXT-X-DISCONTINUITY"):
+            disc = True
+        elif line.startswith("#"):
+            continue
+        elif pending_variant is not None:
+            pending_variant["url"] = line
+            variants.append(pending_variant)
+            pending_variant = None
+        else:
+            segments.append({"url": line, "duration": pending_dur or 0.0, "disc": disc})
+            disc, pending_dur = False, None
+    return variants, segments
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _ad_level(signals: list[str]) -> str:
+    """≥2 个信号判 dirty，1 个判 suspect，否则 clean。"""
+    return "dirty" if len(signals) >= 2 else ("suspect" if signals else "clean")
+
+
+def _midroll_blocks(segments: list[dict], med: float, hosts_all: list[str]) -> list[dict]:
+    """中部疑似广告块：连续短分片聚类成块，需（时长离群 / 与主流分片异域 / 块边界有拼接缝）至少命中两项。
+
+    med 为全列表分片时长中位数；分片太少或整体粒度偏短（med<20s，天然短分片源）时不判。
+    """
+    n = len(segments)
+    if n < 10 or med < 20:
+        return []
+    # 主流域名 = 覆盖 ≥25% 分片的域；整个列表只有两三个域时，占比小的就是外链块
+    counts = collections.Counter(h for h in hosts_all if h)
+    main_hosts = {h for h, c in counts.items() if c >= max(3, int(n * 0.25))}
+
+    def short(i: int) -> bool:
+        d = segments[i]["duration"]
+        return 0 < d <= min(18, 0.6 * med)
+
+    blocks = []
+    i = 1  # 0 号分片归前置贴片逻辑
+    while i < n - 1:
+        if not short(i):
+            i += 1
+            continue
+        j = i
+        while j < n - 1 and (short(j) or segments[j]["disc"]):
+            j += 1
+        block_hosts = {hosts_all[k] for k in range(i, j) if hosts_all[k]}
+        evid = 1  # 时长离群由聚类前提保证
+        if block_hosts and not (block_hosts & main_hosts):
+            evid += 1
+        if segments[i]["disc"] or segments[j]["disc"]:
+            evid += 1
+        secs = sum(segments[k]["duration"] for k in range(i, j))
+        if evid >= 2 and 0 < secs <= 300:  # 广告块按常识不超过 5 分钟
+            blocks.append({"from": i, "to": j, "secs": secs})
+        i = j
+    # 相邻块间隔 ≤2 个正常分片时合并（同一广告被 DISCONTINUITY 切开的情况）
+    merged: list[dict] = []
+    for b in blocks:
+        if merged and b["from"] - merged[-1]["to"] <= 2:
+            merged[-1]["to"] = b["to"]
+            merged[-1]["secs"] += b["secs"]
+        else:
+            merged.append(b)
+    return merged
+
+
+def _detect_ads(segments: list[dict], redirect_hosts: list[str]) -> tuple[str, list[str]]:
+    """广告启发式：前置贴片 + 中段拼接，信号数分级（见 _ad_level）。"""
+    signals = []
+    # ---- 前置贴片 ----
+    if any(s["disc"] for s in segments[:6]):
+        signals.append("前部存在流拼接")
+    if len(segments) >= 4:
+        head = segments[0]["duration"]
+        rest = sorted(s["duration"] for s in segments[1:] if s["duration"] > 0)
+        if head > 0 and rest:
+            med_rest = rest[len(rest) // 2]
+            if med_rest >= 20 and head <= 18 and head < 0.6 * med_rest:
+                signals.append(f"首段时长异常({head:.0f}s/{med_rest:.0f}s)")
+    hosts = [_host(s["url"]) for s in segments[2:10] if s["url"]]
+    hosts = [h for h in hosts if h]
+    first = _host(segments[0]["url"]) if segments else ""
+    if first and hosts and first not in hosts:
+        signals.append("首段与后续分片不同域")
+    for h in redirect_hosts:
+        if any(tok in h for tok in AD_HOST_TOKENS):
+            signals.append("重定向经过广告域")
+            break
+    # ---- 中段拼接广告 ----
+    durs = [s["duration"] for s in segments if s["duration"] > 0]
+    med = sorted(durs)[len(durs) // 2] if durs else 0
+    hosts_all = [_host(s["url"]) for s in segments]
+    blocks = _midroll_blocks(segments, med, hosts_all)
+    if blocks:
+        total = sum(b["secs"] for b in blocks)
+        pos = blocks[0]["from"]
+        signals.append(f"中部疑似广告{len(blocks)}段(约{total:.0f}s,第{pos + 1}片起)")
+        if len(blocks) >= 2:
+            signals.append(f"正片被拼接为{len(blocks) + 1}段")
+    return _ad_level(signals), signals
+
+
+# ---------------- ffprobe ----------------
+
+def _ffprobe_sync(data: bytes) -> dict | None:
+    path = os.path.join(TMP_DIR, f"p{os.getpid()}_{next(_ids)}.bin")
+    try:
+        os.makedirs(TMP_DIR, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        out = subprocess.run(
+            [FFPROBE, "-v", "quiet", "-print_format", "json",
+             "-show_entries", "stream=codec_type,codec_name,width,height", path],
+            capture_output=True, timeout=10).stdout
+        for st in (json.loads(out or b"{}").get("streams") or []):
+            if st.get("codec_type") == "video":
+                return {"width": st.get("width"), "height": st.get("height"), "codec": st.get("codec_name")}
+    except Exception:
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return None
+
+
+async def _ffprobe(data: bytes) -> dict | None:
+    if not FFPROBE or len(data) < 4096:
+        return None
+    return await asyncio.to_thread(_ffprobe_sync, data)
+
+
+# ---------------- 角标静止检测（双帧比对） ----------------
+
+FRAME_W, FRAME_H = 480, 270  # 抽帧统一缩放尺寸（rgb24，固定大小便于逐像素比对）
+
+
+def _frame_sync(data: bytes) -> bytes | None:
+    """从媒体数据抽首帧并缩放为固定尺寸 rgb24，失败返回 None。"""
+    try:
+        out = subprocess.run(
+            [FFMPEG, "-v", "error", "-i", "pipe:0", "-frames:v", "1",
+             "-vf", f"scale={FRAME_W}:{FRAME_H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            input=data, capture_output=True, timeout=10).stdout
+        return out if len(out) >= FRAME_W * FRAME_H * 3 else None
+    except Exception:
+        return None
+
+
+async def _frame(data: bytes) -> bytes | None:
+    if not FFMPEG or len(data) < 4096:
+        return None
+    return await asyncio.to_thread(_frame_sync, data)
+
+
+def _region_diff(a: bytes, b: bytes, x: int, y: int, w: int, h: int) -> float:
+    """两帧同区域平均逐字节差（0~255）。"""
+    total = 0
+    for row in range(h):
+        off = ((y + row) * FRAME_W + x) * 3
+        ra, rb = a[off:off + w * 3], b[off:off + w * 3]
+        total += sum(abs(p - q) for p, q in zip(ra, rb))
+    return total / (h * w * 3)
+
+
+def _static_corner(fa: bytes, fb: bytes, x: int, y: int, w: int, h: int) -> bool:
+    """角落切 4x4 子块取最小差：水印只盖住角落局部时也能命中（整角均值会被背景噪声淹没）。"""
+    cw, ch = max(8, w // 4), max(8, h // 4)
+    for r in range(4):
+        for c in range(4):
+            if _region_diff(fa, fb, x + c * cw, y + r * ch, cw, ch) < 25:
+                return True
+    return False
+
+
+def _watermark_signal(fa: bytes | None, fb: bytes | None) -> str | None:
+    """画面主体已变而某角几乎不变 → 疑似烧录角标（台标同理，只作 suspect 级信号）。"""
+    if not fa or not fb:
+        return None
+    cw, ch = 108, 54
+    corners = {"左上": (0, 0), "右上": (FRAME_W - cw, 0),
+               "左下": (0, FRAME_H - ch), "右下": (FRAME_W - cw, FRAME_H - ch)}
+    center = _region_diff(fa, fb, FRAME_W // 2 - cw // 2, FRAME_H // 2 - ch // 2, cw, ch)
+    if center < 22:  # 两帧画面几乎相同，静止角标无从分辨
+        return None
+    hits = [name for name, (x, y) in corners.items() if _static_corner(fa, fb, x, y, cw, ch)]
+    if hits:
+        return f"疑似水印角标({'、'.join(hits)})"
+    return None
+
+
+# ---------------- 缓存与站点统计 ----------------
+
+def _cache_get(site_key: str, flag: str, episode_id: str) -> dict | None:
+    try:
+        conn = get_conn()
+        row = conn.execute("SELECT metrics, created_at FROM probe_cache WHERE site_key=? AND flag=? AND episode_id=?",
+                           (site_key, flag, episode_id)).fetchone()
+        conn.close()
+        if row and time.time() - row["created_at"] < PROBE_TTL:
+            metrics = json.loads(row["metrics"])
+            metrics["cached"] = True
+            return metrics
+    except Exception:
+        pass
+    return None
+
+
+def _cache_set(site_key: str, flag: str, episode_id: str, metrics: dict):
+    try:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO probe_cache (site_key, flag, episode_id, metrics, created_at) "
+                     "VALUES (?, ?, ?, ?, ?)",
+                     (site_key, flag, episode_id, json.dumps(metrics, ensure_ascii=False), time.time()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _stats_insert(site_key: str, ok: bool, ad_level: str, speed: float | None, height: int | None):
+    try:
+        conn = get_conn()
+        conn.execute("INSERT INTO site_stats (site_key, ok, ad_level, speed_mbps, height, created_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?)",
+                     (site_key, 1 if ok else 0, ad_level if ok else "", speed, height, time.time()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _site_ad_rate(site_key: str) -> float:
+    """站点最近 50 次探测的广告率（dirty=1/suspect=0.5），0~1，作排序先验。"""
+    try:
+        conn = get_conn()
+        rows = conn.execute("SELECT ad_level FROM site_stats WHERE site_key=? AND ok=1 "
+                            "ORDER BY id DESC LIMIT 50", (site_key,)).fetchall()
+        conn.close()
+        if not rows:
+            return 0.0
+        score = sum({"dirty": 1.0, "suspect": 0.5}.get(r["ad_level"], 0.0) for r in rows)
+        return score / len(rows)
+    except Exception:
+        return 0.0
+
+
+# ---------------- 单候选探测 ----------------
+
+def _fail(cand: dict, error: str) -> dict:
+    return {"siteKey": cand["siteKey"], "siteName": cand["siteName"], "vodId": cand["vodId"],
+            "flag": cand["flag"], "status": "fail", "error": error[:80]}
+
+
+async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
+    site_key, flag, episode_id = cand["siteKey"], cand["flag"], cand["episodeId"]
+    cached = _cache_get(site_key, flag, episode_id)
+    if cached:
+        # 旧缓存没算过时长比对时按本次入参补算（只改内存副本，不回写缓存）
+        if ref_s and not cached.get("durationMatch"):
+            _apply_duration_ref(cached, ref_s)
+        return {**cand, "status": "ok", "metrics": cached}
+
+    t0 = time.monotonic()
+    try:
+        data = await _call_device_wait("player", {"key": site_key, "flag": flag, "id": episode_id},
+                                       timeout=PLAYER_TIMEOUT)
+    except Exception as e:
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"解析失败: {e}")
+    open_ms = round((time.monotonic() - t0) * 1000)
+    url = (data.get("url") or "").strip()
+    headers = data.get("headers") or {}
+    if not url:
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, "播放地址为空")
+    if not url.startswith(("http://", "https://")):
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"不支持的地址 {url[:36]}")
+    local = bool(data.get("local"))
+
+    try:
+        pl = await _fetch(url, headers, PLAYLIST_CAP, local=local)
+    except Exception as e:
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"取流失败: {e}")
+    if pl["status"] >= 400:
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"源站返回 HTTP {pl['status']}")
+
+    body, ctype = pl["data"], (pl["ctype"] or "").lower()
+    ttfb = round(pl["ttfb"], 3)
+    redirects = pl["redirects"]
+    try:
+        if (body[:7] == b"#EXTM3U" or "mpegurl" in ctype or ".m3u8" in url.lower()
+                or ".m3u8" in (pl.get("url") or url).lower()):
+            return await _probe_hls(cand, url, headers, local, pl, open_ms, ref_s)
+        if ctype.startswith(("video/", "audio/")) or any(ext in url.lower() for ext in FILE_EXTS):
+            return await _probe_file(cand, pl, open_ms, redirects, ref_s)
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"非媒体地址({pl['ctype'] or '未知类型'})")
+    except Exception as e:
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"探测失败: {e}")
+
+
+def _score(first_frame_s: float, mbps: float, height: int | None) -> dict:
+    speed = 0.6 * min(mbps / 25.0, 1.0) + 0.4 * max(0.0, min(1.0, (6.0 - first_frame_s) / 5.5))
+    quality = min((height or 720) / 1080.0, 1.0)
+    return {"speed": round(speed, 3), "quality": round(quality, 3)}
+
+
+def _apply_duration_ref(metrics: dict, ref_s: float | None) -> None:
+    """正片时长与片库片长交叉比对：远短疑似预告/假资源重罚，明显偏长疑似拼接广告轻罚。"""
+    dur = metrics.get("durationS") or 0
+    if not ref_s or not dur:
+        return
+    delta = dur - ref_s
+    metrics["durationDeltaS"] = round(delta)
+    total = metrics["scores"]["total"]
+    if dur < ref_s * 0.6:
+        metrics["durationMatch"] = "short"
+        metrics["scores"]["total"] = round(max(0.0, total * 0.4), 3)
+    elif delta > max(600, ref_s * 0.15):
+        metrics["durationMatch"] = "long"
+        metrics["scores"]["total"] = round(max(0.0, total - 0.12), 3)
+    else:
+        metrics["durationMatch"] = "ok"
+
+
+def _finish(cand: dict, metrics: dict, ref_s: float | None = None) -> dict:
+    """统一算分并落缓存/统计。"""
+    metrics["scores"] = _score(metrics["firstFrameS"], metrics["throughputMbps"], metrics.get("height"))
+    total = 0.5 * metrics["scores"]["speed"] + 0.5 * metrics["scores"]["quality"]
+    total -= {"clean": 0.0, "suspect": 0.1, "dirty": 0.4}[metrics["adLevel"]]
+    metrics["scores"]["total"] = round(max(0.0, total), 3)
+    _apply_duration_ref(metrics, ref_s)
+    _cache_set(cand["siteKey"], cand["flag"], cand["episodeId"], metrics)
+    _stats_insert(cand["siteKey"], True, metrics["adLevel"], metrics["throughputMbps"], metrics.get("height"))
+    return {**cand, "status": "ok", "metrics": metrics}
+
+
+async def _probe_hls(cand: dict, url: str, headers: dict, local: bool, pl: dict,
+                     open_ms: int, ref_s: float | None = None) -> dict:
+    text = pl["data"].decode("utf-8", "replace")
+    variants, segments = _parse_playlist(text)
+    master_wh = None
+    ttfb = round(pl["ttfb"], 3)
+    redirects = pl["redirects"]
+    if variants:
+        best = max(variants, key=lambda v: v["bandwidth"])
+        if best.get("resolution") and "x" in best["resolution"]:
+            try:
+                w, h = best["resolution"].lower().split("x")
+                master_wh = (int(w), int(h))
+            except ValueError:
+                master_wh = None
+        var_url = urljoin(pl.get("url") or url, best["url"])
+        pl2 = await _fetch(var_url, headers, PLAYLIST_CAP, local=_is_local(var_url) or local)
+        if pl2["status"] >= 400:
+            return _fail(cand, f"子播放列表 HTTP {pl2['status']}")
+        text = pl2["data"].decode("utf-8", "replace")
+        _, segments = _parse_playlist(text)
+        url, ttfb = (pl2.get("url") or var_url), round(pl2["ttfb"], 3)
+        redirects = redirects + pl2["redirects"]
+    if not segments:
+        return _fail(cand, "播放列表无分片")
+
+    ad_level, signals = _detect_ads(segments, redirects)
+    seg = segments[0]
+    duration_s = round(sum(s["duration"] for s in segments), 1)  # 正片总时长（分片 EXTINF 求和），供前端判时长异常
+    seg_url = urljoin(url, seg["url"])
+    sg = await _fetch(seg_url, headers, SEGMENT_CAP, local=_is_local(seg_url) or local)
+    if sg["status"] >= 400:
+        return _fail(cand, f"分片 HTTP {sg['status']}")
+    seg_time = round(sg["elapsed"], 3)
+    mbps = round(len(sg["data"]) * 8 / sg["elapsed"] / 1e6, 2) if sg["elapsed"] > 0.05 else 0.0
+    info = await _ffprobe(sg["data"]) or {}
+    width = master_wh[0] if master_wh else info.get("width")
+    height = master_wh[1] if master_wh else info.get("height")
+    bitrate = round(len(sg["data"]) * 8 / seg["duration"] / 1000) if seg["duration"] > 0 else None
+
+    # 角标静止检测：首分片帧 vs 约 15% 处分片帧（多下载一个分片；台标同样命中，仅 suspect 级）
+    if FFMPEG and len(segments) > 8:
+        mid = min(len(segments) - 1, max(6, int(len(segments) * 0.15)))
+        if segments[mid]["url"]:
+            try:
+                mseg_url = urljoin(url, segments[mid]["url"])
+                ms = await _fetch(mseg_url, headers, SEGMENT_CAP, local=_is_local(mseg_url) or local)
+                if ms["status"] < 400:
+                    fa, fb = await asyncio.gather(_frame(sg["data"]), _frame(ms["data"]))
+                    wm = _watermark_signal(fa, fb)
+                    if wm:
+                        signals.append(wm)
+                        ad_level = _ad_level(signals)
+            except Exception:
+                pass
+
+    return _finish(cand, {
+        "openMs": open_ms, "ttfbS": ttfb, "firstFrameS": round(open_ms / 1000 + ttfb + seg_time, 2),
+        "throughputMbps": mbps, "width": width, "height": height,
+        "codec": info.get("codec"), "bitrateKbps": bitrate,
+        "durationS": duration_s, "adLevel": ad_level, "adSignals": signals, "kind": "hls",
+    }, ref_s)
+
+
+async def _probe_file(cand: dict, pl: dict, open_ms: int, redirects: list[str],
+                      ref_s: float | None = None) -> dict:
+    mbps = round(len(pl["data"]) * 8 / pl["elapsed"] / 1e6, 2) if pl["elapsed"] > 0.05 else 0.0
+    info = await _ffprobe(pl["data"]) or {}
+    return _finish(cand, {
+        "openMs": open_ms, "ttfbS": round(pl["ttfb"], 3),
+        "firstFrameS": round(open_ms / 1000 + pl["elapsed"], 2),
+        "throughputMbps": mbps, "width": info.get("width"), "height": info.get("height"),
+        "codec": info.get("codec"), "bitrateKbps": None,
+        "adLevel": "clean", "adSignals": [], "kind": "file",
+    }, ref_s)
+
+
+# ---------------- 扫描编排 ----------------
+
+async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = None):
+    results: list[dict] = []
+    try:
+        sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
+
+        async def one_detail(m: dict):
+            async with sem:
+                try:
+                    return m, await _call_device_wait("detail", {"key": m["key"], "id": m["id"]},
+                                                      timeout=DETAIL_TIMEOUT)
+                except Exception:
+                    return m, None
+
+        pairs = await asyncio.gather(*[one_detail(m) for m in matches])
+        candidates: list[dict] = []
+        for m, data in pairs:
+            if data is None:
+                results.append({"siteKey": m["key"], "siteName": m.get("name") or m["key"],
+                                "vodId": m["id"], "flag": "", "status": "fail", "error": "详情获取失败"})
+                continue
+            for f in (data.get("flags") or [])[:FLAGS_PER_SITE]:
+                eps = f.get("episodes") or []
+                if not eps or not eps[0].get("url"):
+                    continue
+                candidates.append({"siteKey": m["key"], "siteName": m.get("name") or m["key"],
+                                   "vodId": m["id"], "flag": f.get("flag", ""),
+                                   "episodeId": eps[0]["url"]})
+        _emit(task, {"type": "meta", "total": len(candidates) + len(results)})
+        for r in results:
+            _emit(task, {"type": "result", "result": r})
+
+        sem_probe = asyncio.Semaphore(PROBE_CONCURRENCY)
+        aborted = False
+
+        async def one_probe(cand: dict):
+            nonlocal aborted
+            async with sem_probe:
+                if aborted:
+                    return
+                res = await probe_candidate(cand, ref_s)
+            results.append(res)
+            _emit(task, {"type": "result", "result": res})
+            # 设备掉线：等一轮桥接重连退避，仍不在线则中止扫描，避免刷几十条重复失败
+            if not aborted and res["status"] == "fail" and "设备未连接" in (res.get("error") or ""):
+                await asyncio.sleep(15)
+                dev = active_device()
+                if dev is None or not dev.online:
+                    aborted = True
+                    _emit(task, {"type": "done", "error": "设备连接中断，部分线路未完成探测"})
+
+        await asyncio.gather(*[one_probe(c) for c in candidates])
+        if aborted:
+            return
+
+        ok = [r for r in results if r["status"] == "ok" and r.get("flag")]
+
+        def key(r: dict) -> str:
+            return f"{r['siteKey']}::{r['flag']}"
+
+        def adj(r: dict) -> float:
+            return r["metrics"]["scores"]["total"] - 0.06 * _site_ad_rate(r["siteKey"])
+
+        _emit(task, {"type": "done", "total": len(results),
+                     "recommended": key(sorted(ok, key=lambda r: (AD_RANK[r["metrics"]["adLevel"]], -adj(r)))[0]) if ok else None,
+                     "fastest": key(max(ok, key=lambda r: r["metrics"]["throughputMbps"])) if ok else None,
+                     "highest": key(max(ok, key=lambda r: (r["metrics"].get("height") or 0,
+                                                           r["metrics"].get("bitrateKbps") or 0))) if ok else None})
+    except Exception as e:
+        _emit(task, {"type": "done", "error": str(e)[:120]})
+    finally:
+        task.done = True

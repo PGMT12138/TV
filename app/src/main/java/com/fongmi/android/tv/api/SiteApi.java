@@ -31,9 +31,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -251,63 +248,6 @@ public class SiteApi {
         result.getTypes().forEach(type -> typeByName.put(type.getTypeName(), type));
         List<Class> types = site.getCategories().stream().map(typeByName::get).filter(Objects::nonNull).toList();
         if (!types.isEmpty()) result.setTypes(types);
-    }
-
-    private static void uploadHomeContent(@NonNull Site site, @NonNull Result result) {
-        try {
-            Config manage = Config.manage();
-            if (manage.isEmpty()) return;
-            String baseUrl = manage.getUrl();
-            if (baseUrl.contains("?")) baseUrl = baseUrl.split("\\?")[0];
-            if (!baseUrl.endsWith("/")) baseUrl += "/";
-            baseUrl += "api/home-contents";
-            JsonObject body = new JsonObject();
-            body.addProperty("site_key", site.getKey());
-            body.addProperty("site_name", site.getName());
-            body.addProperty("config_name", site.getConfigName());
-            body.addProperty("content", result.toString());
-            RequestBody requestBody = RequestBody.create(body.toString(), MediaType.parse("application/json"));
-            try (Response response = OkHttp.newCall(baseUrl, new HashMap<>(), requestBody).execute()) {
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private static boolean hasContent(@NonNull Result result) {
-        return !result.getList().isEmpty();
-    }
-
-    private static final ExecutorService uploadExecutor = Executors.newFixedThreadPool(10);
-
-    public static void uploadAllHomeContents(@NonNull Site homeSite, @NonNull Result homeResult) {
-        homeSite.setHasHomeContent(hasContent(homeResult));
-        List<Future<?>> futures = new ArrayList<>();
-        futures.add(uploadExecutor.submit(() -> {
-            try {
-                uploadHomeContent(homeSite, homeResult);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }));
-        for (Site site : VodConfig.get().getSites()) {
-            if (site.getKey().equals(homeSite.getKey())) continue;
-            futures.add(uploadExecutor.submit(() -> {
-                try {
-                    Result result = homeContent(site);
-                    site.setHasHomeContent(hasContent(result));
-                    uploadHomeContent(site, result);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    site.setHasHomeContent(false);
-                }
-            }));
-        }
-        uploadExecutor.submit(() -> {
-            for (Future<?> future : futures) {
-                try { future.get(); } catch (Exception e) { e.printStackTrace(); }
-            }
-        });
     }
 
     private static String extractRealUrl(String playUrl) {

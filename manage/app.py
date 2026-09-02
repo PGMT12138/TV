@@ -6,19 +6,71 @@ import base64
 import httpx
 from urllib.parse import urlparse, parse_qs, unquote, quote, urljoin
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from database import (init_db, get_urls, get_all_urls, add_url, update_url, delete_url, delete_urls_batch,
                       get_app_version, set_app_version,
                       upsert_home_content, get_home_contents, get_home_content, delete_home_content,
                       delete_home_contents_batch,
-                      upsert_video, get_videos, get_video, delete_video, delete_videos_batch)
+                      upsert_video, get_videos, get_video, delete_video, delete_videos_batch,
+                      list_users, delete_user, delete_user_sessions)
 
-app = FastAPI(root_path="/tv-manage")
+app = FastAPI()  # 生产经 nginx /tv-manage 前缀暴露时用 `uvicorn --root-path /tv-manage` 注入，避免代码级 root_path 污染本地测试生成的 URL
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 init_db()
+
+# 互联网版桥接：设备 WebSocket 通道 + 网页观看 API + 视频流代理
+from bridge import router as bridge_router
+app.include_router(bridge_router)
+
+# CINE 视频站（/cine）：豆瓣片库缓存 + 用户收藏/历史 + 资源聚合
+from catalog import router as catalog_router, start_refresh_loop
+from cine import router as cine_router
+app.include_router(catalog_router)
+app.include_router(cine_router)
+
+
+@app.on_event("startup")
+async def _startup():
+    import asyncio
+    app.state.catalog_task = asyncio.get_event_loop().create_task(start_refresh_loop())
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    task = getattr(app.state, "catalog_task", None)
+    if task is not None:
+        task.cancel()
+
+
+# CINE 前端静态站（npm run build 产物，见 web/）
+_CINE_DIR = os.path.join(os.path.join(os.path.dirname(__file__), "static"), "cine")
+
+
+class CineStatic(StaticFiles):
+    """缓存策略：index.html no-cache（每次 revalidate，发新版立即生效，ETag 命中 304 开销极小）；
+    assets 文件名带构建 hash，内容永不变，可 immutable 长缓存。否则浏览器对无 Cache-Control 的
+    index.html 走启发式缓存，发布新版后用户长时间看到旧页面。"""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        resp = super().file_response(full_path, stat_result, scope, status_code)
+        if str(full_path).endswith(".html"):
+            resp.headers["Cache-Control"] = "no-cache"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+
+if os.path.isdir(_CINE_DIR):
+    app.mount("/cine", CineStatic(directory=_CINE_DIR, html=True), name="cine")
+
+
+@app.get("/cine", include_in_schema=False)
+async def cine_redirect():
+    return RedirectResponse(url="/cine/", status_code=307)
 
 
 class UrlCreate(BaseModel):
@@ -270,6 +322,25 @@ async def set_update(platform: str, item: AppVersionUpdate):
     if platform not in ("mobile", "tv"):
         return {"ok": False, "error": "Invalid platform"}
     return set_app_version(platform, item.version, item.url)
+
+
+# ---------------- 网站注册用户管理 ----------------
+
+@app.get("/api/users")
+async def admin_list_users():
+    return {"users": list_users()}
+
+
+@app.post("/api/users/{user_id}/logout")
+async def admin_force_logout(user_id: int):
+    delete_user_sessions(user_id)
+    return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}")
+async def admin_delete_user(user_id: int):
+    delete_user(user_id)
+    return {"ok": True}
 
 
 class HomeContentUpload(BaseModel):

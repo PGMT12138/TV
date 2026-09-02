@@ -87,6 +87,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".receiver.BridgeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.fongmi.android.tv.BRIDGE_CONFIG" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".service.PlaybackService"
             android:exported="true"
