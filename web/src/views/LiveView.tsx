@@ -921,8 +921,9 @@ export const LiveView: React.FC = () => {
                       title="删除该收藏"
                       className="group/del shrink-0 flex items-center px-1.5 text-rose-700 hover:text-rose-500 transition-colors"
                     >
-                      {/* 悬浮底色放在贴合图标的内层小矩形上（按钮本体被 items-stretch 拉满行高，直接给 bg 会铺成整行横带） */}
-                      <span className="flex items-center justify-center w-6 h-6 rounded-md transition-colors group-hover/del:bg-zinc-800">
+                      {/* 悬浮底色放在贴合图标的内层小矩形上（按钮本体被 items-stretch 拉满行高，直接给 bg 会铺成整行横带）；
+                          bg 由 index.css 的 .group\/del:hover .live-del 手写（具名 group-hover 工具类不生成规则） */}
+                      <span className="live-del flex items-center justify-center w-6 h-6 rounded-md transition-colors">
                         <Trash2 className="w-4 h-4" />
                       </span>
                     </button>

@@ -45,6 +45,8 @@ export const WatchView: React.FC = () => {
     selectMatch,
     selectFlag,
     startScan,
+    probeSite,
+    probingSites,
     patchScan,
     patchResource,
     navigateTo,
@@ -797,12 +799,12 @@ export const WatchView: React.FC = () => {
                       step={0.01}
                       value={isMuted ? 0 : volume}
                       onChange={handleVolumeChange}
-                      className="volume-slider hidden sm:block h-1 rounded-lg appearance-none cursor-pointer opacity-70 group-hover/volume:opacity-100 transition-all duration-200 w-14 md:w-16 group-hover/volume:w-20 group-hover/volume:md:w-24"
+                      className="volume-slider hidden sm:block h-1 rounded-lg appearance-none cursor-pointer opacity-70 transition-all duration-200 w-14 md:w-16"
                       style={{
                         background: `linear-gradient(to right, #10b981 ${(isMuted ? 0 : volume) * 100}%, #3f3f46 ${(isMuted ? 0 : volume) * 100}%)`,
                       }}
                     />
-                    <span className="hidden sm:block w-7 text-[10px] font-mono text-zinc-400 text-right tabular-nums opacity-0 group-hover/volume:opacity-100 transition-opacity duration-200">
+                    <span className="volume-pct hidden sm:block w-7 text-[10px] font-mono text-zinc-400 text-right tabular-nums opacity-0 transition-opacity duration-200">
                       {Math.round((isMuted ? 0 : volume) * 100)}
                     </span>
                   </div>
@@ -954,9 +956,12 @@ export const WatchView: React.FC = () => {
               )}
               {scan && scan.status === 'done' && (
                 <div className="flex items-center justify-between gap-2 text-[11px] px-1">
-                  <span className="text-zinc-500 shrink-0">测速完成</span>
+                  <span className="text-zinc-500 shrink-0">
+                    {scan.stoppedEarly ? '测速完成 · 已锁定高质量线路' : '测速完成'}
+                  </span>
                   <span className="text-zinc-400 truncate">
-                    共 {scan.results.length} 条线路，{scan.results.filter((r) => r.status === 'ok' && r.flag).length} 条可用 · 全部线路点击上方按钮
+                    已测 {scan.results.length} 条，{scan.results.filter((r) => r.status === 'ok' && r.flag).length} 条可用
+                    {scan.stoppedEarly ? ' · 其余站点可在全部线路中补测' : ' · 全部线路点击上方按钮'}
                   </span>
                 </div>
               )}
@@ -1092,8 +1097,7 @@ export const WatchView: React.FC = () => {
           </div>
       </div>
 
-      {/* 选源弹窗：全部站点线路分组展示 */}
-      {/* 选源弹窗：全部站点线路分组展示 */}
+      {/* 选源弹窗：全部站点线路分组展示，未探测站点可单站懒补测 */}
       <SourcePickerModal
         open={sourceModalOpen}
         onClose={() => setSourceModalOpen(false)}
@@ -1102,6 +1106,8 @@ export const WatchView: React.FC = () => {
         isFeature={movie.type === 'movie' || movie.type === 'doc'}
         selectedSiteKey={selectedMatch?.siteKey}
         selectedFlag={activeLine?.flag}
+        probingSites={probingSites}
+        onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
         onSelect={(siteKey, flag) => {
           setSourceModalOpen(false);
           applySource(siteKey, flag);

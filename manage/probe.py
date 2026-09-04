@@ -34,6 +34,18 @@ DETAIL_CONCURRENCY = 3        # 并发过高会压垮设备爬虫（QuickJS/Chaq
 PROBE_CONCURRENCY = 4
 RECONNECT_WAIT = 90.0         # 设备掉线后等待桥接重连的上限（App 侧重连退避最长 60s）
 FLAGS_PER_SITE = 8            # 每站点最多探测的线路数（同站线路多为同一上游，全探浪费且压垮设备爬虫）
+
+# ---------------- 智能扫描（按质量排序 + 达标即停） ----------------
+# 站点/线路排序让"可能好的"先探；探到足够多的好线路立即收工，余下留给选源弹窗的懒补测。
+# 冷门片找不到达标线路时自然退化为全量扫描，探测预算自动花在需要的地方。
+SCAN_SITES_CAP = 30           # 扫描站点上限（早停兜底下的安全边界，防极端配置规模失控）
+GOOD_LINES_TARGET = 3         # 达标线路数目标：探到这么多条"够好"的即提前结束
+GOOD_MIN_MBPS = 3.0           # 够好线路的首分片吞吐下限
+HIGH_MIN_HEIGHT = 1080        # 达标条件之一：至少一条线路清晰度 ≥ 此值
+# 线路名只是营销话术（"4K"线实测可能 1616p），但只用于探测排序不影响结果，零风险
+FLAG_GOOD_HINTS = ("4k", "蓝光", "超清", "hdr", "1080", "2160", "杜比", "原盘")
+FLAG_LATE_HINTS = ("爱奇艺", "优酷", "腾讯", "mgtv", "bilibili", "哔哩", "vip",
+                   "解析", "花絮", "预告", "可下载", "备用", "有广告")
 PLAYLIST_CAP = 2 * 1024 * 1024
 SEGMENT_CAP = 1536 * 1024
 TMP_DIR = os.path.join(os.path.dirname(__file__), "data", "tmp")
@@ -452,6 +464,53 @@ def _site_ad_rate(site_key: str) -> float:
         return 0.0
 
 
+def _site_prior(site_key: str) -> float | None:
+    """站点历史质量先验（0~1，探测前排序用）：成功率 + 清晰度 + 速度 - 广告率。
+    取最近 100 次而非近期均值，弱化设备过载夜的大批假失败对成功率的影响；无历史返回 None（中性）。"""
+    try:
+        conn = get_conn()
+        rows = conn.execute("SELECT ok, ad_level, speed_mbps, height FROM site_stats "
+                            "WHERE site_key=? ORDER BY id DESC LIMIT 100", (site_key,)).fetchall()
+        conn.close()
+        if not rows:
+            return None
+        ok_rows = [r for r in rows if r["ok"]]
+        if not ok_rows:
+            return 0.05
+        ok_rate = len(ok_rows) / len(rows)
+        avg_h = sum(r["height"] or 720 for r in ok_rows) / len(ok_rows)
+        avg_s = sum(r["speed_mbps"] or 0.0 for r in ok_rows) / len(ok_rows)
+        ad = sum({"dirty": 1.0, "suspect": 0.5}.get(r["ad_level"], 0.0) for r in ok_rows) / len(ok_rows)
+        return max(0.0, min(1.0, 0.5 * ok_rate + 0.25 * min(avg_h / 1080.0, 1.0)
+                            + 0.25 * min(avg_s / 25.0, 1.0) - 0.3 * ad))
+    except Exception:
+        return None
+
+
+def _flag_rank(flag: str) -> int:
+    """线路名排序：质量关键词在前、VIP 解析/花絮类在后，其余居中（稳定排序保持原序）。"""
+    f = (flag or "").lower()
+    if any(t in f for t in FLAG_GOOD_HINTS):
+        return 0
+    if any(t in f for t in FLAG_LATE_HINTS):
+        return 2
+    return 1
+
+
+def _line_good(r: dict) -> bool:
+    """达标线路：可用、无确认广告、时长比对正常、吞吐达标。"""
+    if r.get("status") != "ok" or not r.get("metrics"):
+        return False
+    m = r["metrics"]
+    return (m.get("adLevel") != "dirty" and m.get("durationMatch") != "short"
+            and (m.get("throughputMbps") or 0.0) >= GOOD_MIN_MBPS)
+
+
+def _line_high(r: dict) -> bool:
+    """高质量线路：达标且清晰度 ≥ HIGH_MIN_HEIGHT。"""
+    return _line_good(r) and (r["metrics"].get("height") or 0) >= HIGH_MIN_HEIGHT
+
+
 # ---------------- 单候选探测 ----------------
 
 def _fail(cand: dict, error: str) -> dict:
@@ -550,6 +609,9 @@ def _finish(cand: dict, metrics: dict, ref_s: float | None = None) -> dict:
 async def _probe_hls(cand: dict, url: str, headers: dict, local: bool, pl: dict,
                      open_ms: int, ref_s: float | None = None) -> dict:
     text = pl["data"].decode("utf-8", "replace")
+    # 分片拼接基准必须用 302 后的最终地址：入口常是带 auth_key 的跳转壳（如 1ljx /cloud/flv→/ufile），
+    # 相对分片拼回入口路径会被 CDN 鉴权拒绝（实测咖啡4K超清/玫瑰4K 分片 402）
+    url = pl.get("url") or url
     variants, segments = _parse_playlist(text)
     master_wh = None
     ttfb = round(pl["ttfb"], 3)
@@ -640,13 +702,25 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                     return m, None
 
         pairs = await asyncio.gather(*[one_detail(m) for m in matches])
+
+        # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序），
+        # 站内线路按名字启发式排序后再截 FLAGS_PER_SITE——好线路先探，早停才有意义
+        def site_order(idx_m: tuple[int, dict]) -> float:
+            idx, m = idx_m
+            prior = _site_prior(m["key"])
+            return -((0.5 if prior is None else prior) - 0.002 * idx)
+
+        ordered = sorted(enumerate(matches), key=site_order)
         candidates: list[dict] = []
-        for m, data in pairs:
+        pair_by_key = {m["key"]: d for m, d in pairs}
+        for _, m in ordered:
+            data = pair_by_key.get(m["key"])
             if data is None:
                 results.append({"siteKey": m["key"], "siteName": m.get("name") or m["key"],
                                 "vodId": m["id"], "flag": "", "status": "fail", "error": "详情获取失败"})
                 continue
-            for f in (data.get("flags") or [])[:FLAGS_PER_SITE]:
+            flags = sorted(data.get("flags") or [], key=lambda f: _flag_rank(f.get("flag") or ""))
+            for f in flags[:FLAGS_PER_SITE]:
                 eps = f.get("episodes") or []
                 if not eps or not eps[0].get("url"):
                     continue
@@ -659,11 +733,12 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
 
         sem_probe = asyncio.Semaphore(PROBE_CONCURRENCY)
         aborted = False
+        early_stop = False
 
         async def one_probe(cand: dict):
-            nonlocal aborted
+            nonlocal aborted, early_stop
             async with sem_probe:
-                if aborted:
+                if aborted or early_stop:
                     return
                 res = await probe_candidate(cand, ref_s)
             results.append(res)
@@ -675,6 +750,11 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                 if dev is None or not dev.online:
                     aborted = True
                     _emit(task, {"type": "done", "error": "设备连接中断，部分线路未完成探测"})
+                    return
+            # 达标即停：够好线路数达标且至少一条高清，剩余候选不再探测（在飞的探完自然并入）
+            if not early_stop and sum(1 for r in results if _line_good(r)) >= GOOD_LINES_TARGET \
+                    and any(_line_high(r) for r in results):
+                early_stop = True
 
         await asyncio.gather(*[one_probe(c) for c in candidates])
         if aborted:
@@ -688,7 +768,7 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         def adj(r: dict) -> float:
             return r["metrics"]["scores"]["total"] - 0.06 * _site_ad_rate(r["siteKey"])
 
-        _emit(task, {"type": "done", "total": len(results),
+        _emit(task, {"type": "done", "total": len(results), "stoppedEarly": early_stop,
                      "recommended": key(sorted(ok, key=lambda r: (AD_RANK[r["metrics"]["adLevel"]], -adj(r)))[0]) if ok else None,
                      "fastest": key(max(ok, key=lambda r: r["metrics"]["throughputMbps"])) if ok else None,
                      "highest": key(max(ok, key=lambda r: (r["metrics"].get("height") or 0,

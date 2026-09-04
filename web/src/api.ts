@@ -1,6 +1,19 @@
 // 后端（manage FastAPI）接口封装。同源部署（/cine 与 /api 同一服务），开发时由 vite 代理。
 import type { MovieItem, UserProfile, ResourceMatch, WatchHistoryItem, CatalogSection, LiveListData, LivePlayData, LiveEpgData, LiveFavoriteItem, LiveHistoryItem, LiveProbeResult } from './types';
 
+/** /api/resource/search/stream 的 SSE 事件。 */
+export interface SearchStreamEvent {
+  type: 'meta' | 'site' | 'done' | 'error';
+  sites?: number;          // meta：本次实时搜索的站点总数
+  cached?: boolean;        // meta/done：缓存命中（site 事件合并为一次下发）
+  siteKey?: string;        // site：来源站点（缓存命中时缺省）
+  siteName?: string;
+  matched?: ResourceMatch[];
+  searched?: number;       // done：实际搜索的站点数
+  deviceOnline?: boolean;  // error：设备离线
+  error?: string;
+}
+
 async function request<T = any>(url: string, options: RequestInit = {}): Promise<T> {
   const resp = await fetch(url, {
     credentials: 'same-origin',
@@ -55,6 +68,28 @@ export const api = {
     request<{ deviceOnline: boolean; results: ResourceMatch[]; searched: number; error?: string }>(
       `/api/resource/search?wd=${encodeURIComponent(wd)}`
     ),
+  // SSE 逐站推送版聚合搜索：done/error 后自动断开；连接中断回调一个合成 error 事件并关闭
+  resourceSearchStream: (wd: string, onEvent: (ev: SearchStreamEvent) => void): EventSource => {
+    const es = new EventSource(`/api/resource/search/stream?wd=${encodeURIComponent(wd)}`);
+    es.onmessage = (evt) => {
+      let ev: SearchStreamEvent;
+      try {
+        ev = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      onEvent(ev);
+      if (ev.type === 'done' || ev.type === 'error') {
+        es.onerror = null;
+        es.close();
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      onEvent({ type: 'error', error: '连接中断' });
+    };
+    return es;
+  },
   resourceAdopt: (key: string, id: string) =>
     request<{ ok: boolean; movie: MovieItem | null; error?: string }>('/api/resource/adopt', {
       method: 'POST',

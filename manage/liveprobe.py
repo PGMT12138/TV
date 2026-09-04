@@ -203,6 +203,7 @@ async def _probe_flv(group: str, channel: str, line: int, url: str, headers: dic
 async def _probe_hls(group: str, channel: str, line: int, url: str, headers: dict,
                      local: bool, pl: dict, open_ms: int) -> dict:
     text = pl["data"].decode("utf-8", "replace")
+    url = pl.get("url") or url  # 同 probe._probe_hls：分片拼接基准用 302 后最终地址，入口地址可能是带鉴权的跳转壳
     variants, segments = _parse_playlist(text)
     master_wh = None
     ttfb = round(pl["ttfb"], 3)

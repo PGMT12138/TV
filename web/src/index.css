@@ -6,6 +6,8 @@
    真鼠标环境悬停恢复，真触屏设备不加该类、悬停粘滞问题不回归。 */
 @custom-variant hover (:where(html.has-mouse) &:hover);
 @custom-variant group-hover (:where(html.has-mouse) &:is(:where(.group):hover *));
+/* 注意：静态覆写不覆盖具名形式 group-hover/xxx（工具类会静默不生成 CSS）——
+   具名组悬停效果必须在下方手写规则补齐（音量条伸长曾因此失效），勿在 JSX 里用 group-hover/xxx */
 
 @layer base {
   :root {
@@ -114,4 +116,22 @@
 .group\/volume:active .volume-slider::-moz-range-thumb,
 .volume-slider:focus-visible::-moz-range-thumb {
   opacity: 1;
+}
+
+/* 具名组悬停（group-hover/volume、group-hover/del 的工具类被上方 @custom-variant 覆写后
+   静默不生成，效果在此手写补齐；宽度值与 w-14/w-20、md:w-16/md:w-24 对齐） */
+html.has-mouse .group\/volume:hover .volume-slider {
+  opacity: 1;
+  width: 5rem;
+}
+@media (min-width: 48rem) {
+  html.has-mouse .group\/volume:hover .volume-slider {
+    width: 6rem;
+  }
+}
+html.has-mouse .group\/volume:hover .volume-pct {
+  opacity: 1;
+}
+html.has-mouse .group\/del:hover .live-del {
+  background-color: var(--color-zinc-800, #27272a);
 }

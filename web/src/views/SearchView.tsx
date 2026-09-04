@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { GENRE_LIST, REGION_LIST, YEAR_LIST, HOT_SEARCH_TERMS } from '../data/mockMovies';
 import { MovieCard } from '../components/MovieCard';
-import { api, imgUrl } from '../api';
-import { MovieItem, ResourceMatch } from '../types';
+import { api } from '../api';
+import { MovieItem } from '../types';
 import {
   Search,
   SlidersHorizontal,
@@ -16,8 +16,7 @@ import {
   Star,
   Flame,
   Clock,
-  Loader2,
-  MonitorSmartphone
+  Loader2
 } from 'lucide-react';
 
 const MEDIA_TYPES = [
@@ -36,45 +35,33 @@ const SORT_OPTIONS = [
 ];
 
 export const SearchView: React.FC = () => {
-  const { filterState, updateFilter, resetFilter, movies, mergeMovies, navigateTo, showToast, deviceOnline, saveBrowse, restoreBrowse } = useApp();
+  const { filterState, updateFilter, resetFilter, movies, mergeMovies, saveBrowse, restoreBrowse } = useApp();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [remoteSearching, setRemoteSearching] = useState(false);
-  const [resourceMatches, setResourceMatches] = useState<ResourceMatch[] | null>(null);
-  const [resourceSearching, setResourceSearching] = useState(false);
-  const [adoptingId, setAdoptingId] = useState<string | null>(null);
-  const [searchedTerm, setSearchedTerm] = useState('');
   const seqRef = useRef(0);
 
   const query = filterState.query.trim();
 
-  // 手动搜索：点按钮/回车才触发远程检索（豆瓣/TMDB 轨 + 资源轨）。
-  // 资源轨静默后台运行：豆瓣/TMDB 有结果时不展示（进播放页由 resolveResources
-  // 复用服务端 6h 缓存，这次后台搜索就是预热），无结果时才在下方露出资源卡。
+  // 手动搜索：点按钮/回车才触发远程检索（豆瓣/TMDB 片库）。
+  // 只有片库命中的词才静默预热服务端 6h 资源缓存（进播放页秒回）；
+  // 片库没有的词不触发设备端站点聚合搜索，避免每次搜索都压设备爬虫。
   const runSearch = (term: string) => {
     const wd = term.trim();
     if (!wd) return;
     const seq = ++seqRef.current;
-    setSearchedTerm(wd);
     setRemoteSearching(true);
     api.catalogSearch(wd)
       .then(({ list }) => {
-        if (seq === seqRef.current && list.length) mergeMovies(list);
+        if (seq !== seqRef.current) return;
+        if (list.length) {
+          mergeMovies(list);
+          api.resourceSearch(wd).catch(() => {}); // 预热与展示无关，静默失败
+        }
       })
       .catch(() => { /* 忽略：豆瓣不可达时本地过滤仍可用 */ })
       .finally(() => {
         if (seq === seqRef.current) setRemoteSearching(false);
-      });
-    setResourceSearching(true);
-    api.resourceSearch(wd)
-      .then((res) => {
-        if (seq === seqRef.current) setResourceMatches(res.results || []);
-      })
-      .catch(() => {
-        if (seq === seqRef.current) setResourceMatches([]);
-      })
-      .finally(() => {
-        if (seq === seqRef.current) setResourceSearching(false);
       });
   };
 
@@ -86,14 +73,10 @@ export const SearchView: React.FC = () => {
 
   const clearSearch = () => {
     updateFilter({ query: '' });
-    setSearchedTerm('');
-    setResourceMatches(null);
   };
 
   const handleResetFilter = () => {
     resetFilter();
-    setSearchedTerm('');
-    setResourceMatches(null);
   };
 
   // Computed filtered results
@@ -213,21 +196,6 @@ export const SearchView: React.FC = () => {
 
   const browseMode = !query;
   const displayMovies = browseMode ? browse.items : filteredMovies;
-
-  const handleAdopt = async (match: ResourceMatch) => {
-    const uid = `${match.siteKey}:${match.vodId}`;
-    setAdoptingId(uid);
-    try {
-      const res = await api.resourceAdopt(match.siteKey, match.vodId);
-      if (res.error || !res.movie) throw new Error(res.error || '打开资源失败');
-      mergeMovies([res.movie]);
-      setAdoptingId(null);
-      navigateTo('detail', { movieId: res.movie.id });
-    } catch (e: any) {
-      setAdoptingId(null);
-      showToast(e?.message || '打开资源失败', 'warning');
-    }
-  };
 
   const hasActiveFilters =
     filterState.query !== '' ||
@@ -515,83 +483,6 @@ export const SearchView: React.FC = () => {
             重置所有筛选参数
           </button>
         </div>
-      )}
-      {/* Online Resource Sources：豆瓣/TMDB 无结果时的兜底展示；有结果时资源轨只在后台
-          静默预热缓存，各站点线路进播放页后由 resolveResources 呈现 */}
-      {query && searchedTerm === query && filteredMovies.length === 0 && (resourceSearching || resourceMatches !== null) && (
-        <section className="space-y-4 border-t border-zinc-800 pt-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
-                <MonitorSmartphone className="w-4 h-4" />
-              </div>
-              <h3 className="text-xl sm:text-2xl font-instrument-serif font-normal text-white">
-                在线播放源
-              </h3>
-              <span className="text-xs text-zinc-500">豆瓣/TMDB 未收录，来自设备端站点实时搜索</span>
-            </div>
-            {resourceSearching && (
-              <span className="flex items-center gap-1.5 text-xs text-cyan-400">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> 搜索中...
-              </span>
-            )}
-          </div>
-
-          {!deviceOnline && !resourceSearching ? (
-            <div className="py-6 text-center text-sm text-zinc-500 rounded-2xl bg-zinc-900/40 border border-zinc-800">
-              设备不在线：请在安卓端打开 App 并保持桥接连接，即可搜索在线资源
-            </div>
-          ) : resourceMatches && resourceMatches.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {resourceMatches.slice(0, 12).map((match) => {
-                const uid = `${match.siteKey}:${match.vodId}`;
-                const busy = adoptingId === uid;
-                return (
-                  <div
-                    key={uid}
-                    onClick={() => !busy && handleAdopt(match)}
-                    className={`group flex gap-3.5 p-3 rounded-2xl bg-zinc-900/70 hover:bg-zinc-800 border border-zinc-800 hover:border-cyan-500/40 cursor-pointer transition-all duration-300 hover:shadow-xl ${busy ? 'opacity-60' : ''}`}
-                  >
-                    <div className="relative w-24 shrink-0 aspect-[3/4] rounded-xl overflow-hidden bg-zinc-950">
-                      {match.pic ? (
-                        <img
-                          src={imgUrl(match.pic)}
-                          alt={match.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Film className="w-6 h-6 text-zinc-700" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1 flex flex-col justify-between py-0.5">
-                      <div>
-                        <h4 className="font-bold text-sm text-zinc-100 group-hover:text-cyan-300 transition-colors truncate">
-                          {match.title}
-                        </h4>
-                        <p className="text-xs text-zinc-400 truncate mt-0.5">
-                          {match.typeName || '未知分类'}
-                        </p>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] mt-2">
-                        <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-medium truncate max-w-[100px]">
-                          {match.siteName}
-                        </span>
-                        <span className="text-zinc-400">{match.remarks || '可播放'}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : !resourceSearching ? (
-            <div className="py-6 text-center text-sm text-zinc-500 rounded-2xl bg-zinc-900/40 border border-zinc-800">
-              设备站点未搜到「{query}」相关资源
-            </div>
-          ) : null}
-        </section>
       )}
     </div>
   );

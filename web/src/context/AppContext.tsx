@@ -57,6 +57,8 @@ interface AppContextType {
   selectFlag: (movieId: string, index: number, manual?: boolean) => void;
   currentEpisodes: (movieId: string) => { flag: string; episodes: Episode[] } | null;
   startScan: (movieId: string) => void;
+  probeSite: (movieId: string, siteKey: string) => void;  // 选源弹窗懒补测：单站重扫，结果并入现有扫描
+  probingSites: Set<string>;                              // 懒补测进行中的站点
   patchScan: (movieId: string, patch: Partial<ScanState>) => void;
   patchResource: (movieId: string, patch: Partial<ResourceState>) => void;
   refreshDeviceStatus: () => void;
@@ -264,31 +266,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (existing && ['searching', 'selecting', 'ready'].includes(existing.status)) return;
     resolvingRef.current.add(movieId);
     setResource(movieId, { status: 'searching', matches: [], flags: [], selected: undefined, error: undefined });
+    // 资源型影片（从资源卡进入）优先精确锁定自身来源；观看历史里存了上次选择的站点/线路，优先恢复
+    const raw = (movie as any).raw as { key?: string; id?: string } | undefined;
+    const saved = historyRef.current.find((h) => h.movieId === movieId && h.siteKey);
+
+    // SSE 流式聚合：站点结果到一个合并一个（选源弹窗渐进可见）。选定来源的时机 =
+    // 预设/历史站点命中、或出现片名精确匹配（score=100）、或超过 8s 宽限取当前最优、或流结束——
+    // 不再等全部 126 个站点聚齐（冷词原 JSON 实现要 ~100s）。选定后继续合并剩余站点供手动换源。
+    const all: ResourceMatch[] = [];
+    const seen = new Set<string>();
+    const startedAt = Date.now();
+    let decided = false;
+    let streamEnded = false;
+    let failed = false;
+    let onDecide: (() => void) | null = null;
+    const decision = new Promise<void>((resolve) => { onDecide = resolve; });
+
+    const publish = () => {
+      if (!all.length) return;
+      setResource(movieId, { matches: [...all].sort((a, b) => b.score - a.score).slice(0, 60) });
+    };
+    const tryDecide = () => {
+      if (decided) return;
+      const presetHit = !!(raw?.key && raw?.id && all.find((m) => m.siteKey === raw.key && m.vodId === raw.id));
+      const savedHit = !!(saved && all.find((m) => m.siteKey === saved.siteKey));
+      const exact = !saved && !raw?.key ? all.some((m) => m.score >= 100) : false;
+      // 有历史/预设时只认目标站点或超时兜底，避免「恢复上次来源」被其它站的精确匹配抢跑
+      if (presetHit || savedHit || exact || ((streamEnded || Date.now() - startedAt >= 8000) && all.length)) {
+        decided = true;
+        onDecide?.();
+      }
+    };
+    const timer = setTimeout(tryDecide, 8000);
+
+    api.resourceSearchStream(movie.title, (ev) => {
+      if (ev.type === 'site') {
+        if (ev.matched?.length) {
+          for (const m of ev.matched) {
+            const uid = `${m.siteKey}:${m.vodId}`;
+            if (seen.has(uid)) continue;
+            seen.add(uid);
+            all.push(m);
+          }
+          publish();
+        }
+        tryDecide();
+      } else if (ev.type === 'done') {
+        streamEnded = true;
+        tryDecide();
+        if (!decided) {
+          decided = true;
+          setResource(movieId, { status: 'noresult', matches: [] });
+        }
+        onDecide?.();
+      } else if (ev.type === 'error') {
+        streamEnded = true;
+        if (!decided && !all.length) {
+          decided = true;
+          failed = true;
+          setResource(movieId, { status: ev.deviceOnline === false ? 'offline' : 'error', error: ev.error || '设备未连接' });
+        }
+        tryDecide();
+        onDecide?.();
+      }
+    });
+
+    await decision;
+    clearTimeout(timer);
+    if (failed || !all.length) {
+      resolvingRef.current.delete(movieId);
+      return;
+    }
+
+    const ranked = [...all].sort((a, b) => b.score - a.score);
+    const preset = raw?.key && raw?.id ? ranked.find((m) => m.siteKey === raw.key && m.vodId === raw.id) : undefined;
+    const savedMatch = saved ? ranked.find((m) => m.siteKey === saved.siteKey) : undefined;
+    const fallback = preset || ranked[0];
+    const best = preset || savedMatch || ranked[0];
+    // 默认路径（无资源卡预设、无历史偏好）：不急起播，等扫描完成选最优线路
+    setResource(movieId, { awaitScan: !preset && !savedMatch });
+    if (saved && !savedMatch && !preset) {
+      showToast('上次的观看来源已不可用，已为你更换来源', 'info');
+    }
     try {
-      const res = await api.resourceSearch(movie.title);
-      if (!res.deviceOnline) {
-        setResource(movieId, { status: 'offline', error: res.error || '设备未连接' });
-        return;
-      }
-      // 资源型影片（从资源卡进入）优先精确锁定自身来源
-      const raw = (movie as any).raw as { key?: string; id?: string } | undefined;
-      const preset = raw?.key && raw?.id
-        ? res.results.find((m) => m.siteKey === raw.key && m.vodId === raw.id)
-        : undefined;
-      // 观看历史里存了上次选择的站点/线路，优先恢复
-      const saved = historyRef.current.find((h) => h.movieId === movieId && h.siteKey);
-      const savedMatch = saved ? res.results.find((m) => m.siteKey === saved.siteKey) : undefined;
-      const fallback = preset || res.results[0];
-      const best = preset || savedMatch || res.results[0];
-      if (!best) {
-        setResource(movieId, { status: 'noresult', matches: res.results });
-        return;
-      }
-      // 默认路径（无资源卡预设、无历史偏好）：不急起播，等扫描完成选最优线路
-      setResource(movieId, { matches: res.results, awaitScan: !preset && !savedMatch });
-      if (saved && !savedMatch && !preset) {
-        showToast('上次的观看来源已不可用，已为你更换来源', 'info');
-      }
       let flags = await fetchMatchFlags(movieId, best);
       let restored = best === savedMatch && !!flags;
       // 上次线路获取失败（站点失效/无线路）→ 自动换默认来源再试一次
@@ -311,7 +371,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       resolvingRef.current.delete(movieId);
     }
-  }, [fetchMatchFlags]);
+  }, [fetchMatchFlags, showToast]);
 
   // 用户手动换源/换线路后，本影片不再执行自动切源
   const markScanUserPicked = useCallback((movieId: string) => {
@@ -344,7 +404,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // ---- 智能选源扫描（SSE 渐进消费，结果按 siteKey::flag 幂等合并） ----
   const scanEsRef = useRef<EventSource | null>(null);
-  useEffect(() => () => scanEsRef.current?.close(), []);
+  const lazyEsRef = useRef<EventSource | null>(null);  // 懒补测独立流，不打断主扫描
+  useEffect(() => () => { scanEsRef.current?.close(); lazyEsRef.current?.close(); }, []);
+
+  // 单条探测结果并入扫描状态（主扫描/懒补测共用）
+  const mergeScanResult = useCallback((movieId: string, item: ScanCandidateResult) => {
+    setMovieResources((prev) => {
+      const cur = prev[movieId];
+      if (!cur?.scan) return prev;
+      const results = cur.scan.results.filter((x) => !(x.siteKey === item.siteKey && x.flag === item.flag));
+      results.push(item);
+      return { ...prev, [movieId]: { ...cur, scan: { ...cur.scan, results, finished: results.length } } };
+    });
+  }, []);
 
   const patchScan = useCallback((movieId: string, patch: Partial<ScanState>) => {
     setMovieResources((prev) => {
@@ -353,6 +425,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ...prev, [movieId]: { ...res, scan: { ...res.scan, ...patch } } };
     });
   }, []);
+
+  // 消费一次扫描的 SSE 流。lazy=true 为选源弹窗的单站懒补测：只并入线路结果，
+  // 不动扫描状态与推荐键——避免补测完成误触发"自动切最优线路"打断用户正在看的线路
+  const openScanStream = useCallback((movieId: string, scanId: string, opts?: { lazy?: boolean; onDone?: () => void }) => {
+    const lazy = !!opts?.lazy;
+    const esRef = lazy ? lazyEsRef : scanEsRef;
+    esRef.current?.close();
+    const es = new EventSource(`/api/resource/scan/${scanId}`);
+    esRef.current = es;
+    const startedAt = Date.now();
+    es.onmessage = (evt) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      if (msg.type === 'meta') {
+        if (!lazy) patchScan(movieId, { total: msg.total || 0 });
+      } else if (msg.type === 'result' && msg.result) {
+        mergeScanResult(movieId, msg.result as ScanCandidateResult);
+      } else if (msg.type === 'done') {
+        if (!lazy) patchScan(movieId, {
+          status: 'done',
+          stoppedEarly: !!msg.stoppedEarly,
+          recommendedKey: msg.recommended || undefined,
+          fastestKey: msg.fastest || undefined,
+          highestKey: msg.highest || undefined,
+        });
+        es.close();
+        if (esRef.current === es) esRef.current = null;
+        opts?.onDone?.();
+      }
+    };
+    es.onerror = () => {
+      // 服务端结束流后若一直等不到 done（异常断开），超过 3 分钟放弃等待
+      if (Date.now() - startedAt > 180_000) {
+        es.close();
+        if (esRef.current === es) esRef.current = null;
+        if (!lazy) patchScan(movieId, { status: 'done' });
+        opts?.onDone?.();
+      }
+    };
+    return es;
+  }, [patchScan, mergeScanResult]);
 
   const startScan = useCallback((movieId: string) => {
     const res = movieResourcesRef.current[movieId];
@@ -366,64 +483,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const movie = moviesRef.current.find((m) => m.id === movieId);
     const dm = movie?.duration?.match(/(\d+)\s*分钟/);
     const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
-    const startedAt = Date.now();
+    setMovieResources((prev) => {
+      const cur = prev[movieId];
+      if (!cur) return prev;
+      return { ...prev, [movieId]: { ...cur, scan: { scanId: '', status: 'running', total: 0, finished: 0, results: [],
+        // 从历史恢复的线路等价于用户手动选过：扫描完成后不自动切换
+        userPicked: cur.restoredPick ? true : undefined } } };
+    });
     api.resourceScan(candidates, refDurationS).then((r) => {
       if (r.error || !r.scanId) {
         showToast(`智能选源启动失败：${r.error || '未知错误'}`, 'warning');
-        setResource(movieId, { awaitScan: false }); // 扫描起不来就放行起播，别卡住
+        setMovieResources((prev) => {
+          const cur = prev[movieId];
+          if (!cur) return prev;
+          return { ...prev, [movieId]: { ...cur, scan: undefined, awaitScan: false } }; // 清掉允许重试
+        });
         return;
       }
+      patchScan(movieId, { scanId: r.scanId });
+      openScanStream(movieId, r.scanId);
+    }).catch(() => {
+      showToast('智能选源启动失败', 'warning');
       setMovieResources((prev) => {
         const cur = prev[movieId];
         if (!cur) return prev;
-        return { ...prev, [movieId]: { ...cur, scan: { scanId: r.scanId, status: 'running', total: 0, finished: 0, results: [],
-          // 从历史恢复的线路等价于用户手动选过：扫描完成后不自动切换
-          userPicked: cur.restoredPick ? true : undefined } } };
+        return { ...prev, [movieId]: { ...cur, scan: undefined, awaitScan: false } };
       });
-      scanEsRef.current?.close();
-      const es = new EventSource(`/api/resource/scan/${r.scanId}`);
-      scanEsRef.current = es;
-      es.onmessage = (evt) => {
-        let msg: any;
-        try {
-          msg = JSON.parse(evt.data);
-        } catch {
-          return;
-        }
-        if (msg.type === 'meta') {
-          patchScan(movieId, { total: msg.total || 0 });
-        } else if (msg.type === 'result' && msg.result) {
-          const item = msg.result as ScanCandidateResult;
-          setMovieResources((prev) => {
-            const cur = prev[movieId];
-            if (!cur?.scan) return prev;
-            const results = cur.scan.results.filter((x) => !(x.siteKey === item.siteKey && x.flag === item.flag));
-            results.push(item);
-            return { ...prev, [movieId]: { ...cur, scan: { ...cur.scan, results, finished: results.length } } };
-          });
-        } else if (msg.type === 'done') {
-          patchScan(movieId, {
-            status: 'done',
-            recommendedKey: msg.recommended || undefined,
-            fastestKey: msg.fastest || undefined,
-            highestKey: msg.highest || undefined,
-          });
-          es.close();
-          if (scanEsRef.current === es) scanEsRef.current = null;
-        }
-      };
-      es.onerror = () => {
-        // 服务端结束流后若一直等不到 done（异常断开），超过 3 分钟放弃等待
-        if (Date.now() - startedAt > 180_000) {
-          es.close();
-          if (scanEsRef.current === es) scanEsRef.current = null;
-          patchScan(movieId, { status: 'done' });
-        }
-      };
-    }).catch(() => {
-      setResource(movieId, { awaitScan: false });
     });
-  }, [patchScan, showToast]);
+  }, [patchScan, showToast, openScanStream]);
+
+  // ---- 懒补测：选源弹窗对单个未探测站点发起补扫，结果渐进并入 ----
+  const [probingSites, setProbingSites] = useState<Set<string>>(new Set());
+  const probeSite = useCallback((movieId: string, siteKey: string) => {
+    const res = movieResourcesRef.current[movieId];
+    if (!res?.matches?.length) return;
+    if (res.scan?.status === 'running') {
+      showToast('智能测速进行中，稍后可再补测', 'info');
+      return;
+    }
+    const match = res.matches.find((m) => m.siteKey === siteKey);
+    if (!match) return;
+    setProbingSites((prev) => new Set(prev).add(siteKey));
+    const movie = moviesRef.current.find((m) => m.id === movieId);
+    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
+    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const finish = () => setProbingSites((prev) => {
+      const next = new Set(prev);
+      next.delete(siteKey);
+      return next;
+    });
+    api.resourceScan([{ key: match.siteKey, id: match.vodId, name: match.siteName }], refDurationS).then((r) => {
+      if (r.error || !r.scanId) {
+        finish();
+        showToast(`补测启动失败：${r.error || '未知错误'}`, 'warning');
+        return;
+      }
+      openScanStream(movieId, r.scanId, { lazy: true, onDone: finish });
+    }).catch(() => {
+      finish();
+      showToast('补测启动失败', 'warning');
+    });
+  }, [showToast, openScanStream]);
 
   // ---- 路由 ----
   const navHistoryRef = useRef<PageView[]>([]);
@@ -646,6 +766,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectFlag,
         currentEpisodes,
         startScan,
+        probeSite,
+        probingSites,
         patchScan,
         patchResource,
         refreshDeviceStatus,

@@ -25,7 +25,7 @@ from database import get_conn
 import database
 from bridge import active_device, call_device
 from catalog import upsert_subject, get_subject, row_to_item, TMDB_PROXY, upgrade_douban_img
-from probe import start_scan, get_scan
+from probe import start_scan, get_scan, SCAN_SITES_CAP
 from liveprobe import (start_live_scan as liveprobe_start_scan, get_live_scan,
                        get_live_probe_results, clean_live_probe, cancel_live_scan, plan_channels, LIVE_PROBE_TTL)
 
@@ -365,43 +365,70 @@ async def _searchable_sites() -> list[dict]:
     return _sites_cache["sites"]
 
 
-async def _search_one(site: dict, wd: str, sem: asyncio.Semaphore) -> list[dict]:
+async def _search_one(site: dict, wd: str, sem: asyncio.Semaphore) -> tuple[dict, list]:
     async with sem:
         try:
             data = await call_device("search", {"key": site.get("key", ""), "wd": wd},
                                      timeout=SEARCH_TIMEOUT)
-            return data.get("list") or []
+            return site, data.get("list") or []
         except Exception:
-            return []
+            return site, []
 
 
-async def _do_live_search(wd: str) -> dict:
-    """实时聚合搜索（原 resource_search 主体）。"""
+def _site_matches(site: dict, wd: str, vods: list) -> list[dict]:
+    """单站结果打分过滤，产出与前 JSON 聚合口径一致的 matched 列表。"""
+    matched = []
+    for vod in vods:
+        score = _match_score(wd, vod.get("name", ""))
+        if score <= 0:
+            continue
+        matched.append({
+            "title": vod.get("name", ""),
+            "siteKey": site.get("key", ""),
+            "siteName": site.get("name", ""),
+            "vodId": vod.get("id", ""),
+            "pic": vod.get("pic", ""),
+            "remarks": vod.get("remarks", ""),
+            "typeName": vod.get("typeName", ""),
+            "score": score,
+        })
+    return matched
+
+
+async def _live_search_events(wd: str):
+    """逐站实时搜索事件流：meta(站点总数) → site*(每站完成即出，无命中也发空列表供进度计数) → done。
+    站点列表获取失败抛 RuntimeError，由消费方转成设备错误。"""
     sites = await _searchable_sites()
     database.record_search_sites(sites)
     disabled = database.get_disabled_site_keys()
     sites = [s for s in sites if s.get("key", "") not in disabled]
+    yield {"type": "meta", "sites": len(sites)}
     sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
-    results = await asyncio.gather(*[_search_one(s, wd, sem) for s in sites])
-    matched = []
-    for site, vods in zip(sites, results):
-        for vod in vods:
-            score = _match_score(wd, vod.get("name", ""))
-            if score <= 0:
-                continue
-            matched.append({
-                "title": vod.get("name", ""),
-                "siteKey": site.get("key", ""),
-                "siteName": site.get("name", ""),
-                "vodId": vod.get("id", ""),
-                "pic": vod.get("pic", ""),
-                "remarks": vod.get("remarks", ""),
-                "typeName": vod.get("typeName", ""),
-                "score": score,
-            })
+    tasks = [asyncio.ensure_future(_search_one(s, wd, sem)) for s in sites]
+    try:
+        for fut in asyncio.as_completed(tasks):
+            site, vods = await fut
+            yield {"type": "site", "siteKey": site.get("key", ""), "siteName": site.get("name", ""),
+                   "matched": _site_matches(site, wd, vods)}
+        yield {"type": "done", "searched": len(sites)}
+    finally:
+        # 消费方提前断开（如用户关页/换词）时取消在途搜索，避免任务泄漏
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+
+
+async def _do_live_search(wd: str) -> dict:
+    """实时聚合搜索：收集全部站点结果（JSON 接口与后台重搜用，不流式）。"""
+    matched, searched = [], 0
+    async for ev in _live_search_events(wd):
+        if ev["type"] == "site":
+            matched.extend(ev["matched"])
+        elif ev["type"] == "done":
+            searched = ev["searched"]
     matched.sort(key=lambda m: -m["score"])
     del matched[60:]
-    return {"results": matched, "searched": len(sites)}
+    return {"results": matched, "searched": searched}
 
 
 def _norm_wd(wd: str) -> str:
@@ -472,6 +499,56 @@ async def resource_search(wd: str, year: str = ""):
     if secrets.randbelow(10) == 0:  # 写入时低概率顺手清理过期行，避免表无限增长
         database.clean_search_cache(now - SEARCH_CACHE_TTL)
     return {"deviceOnline": True, **fresh}
+
+
+@router.get("/api/resource/search/stream")
+async def resource_search_stream(wd: str):
+    """SSE 逐站推送聚合搜索：站点完成一个推一个，前台无需等全部聚齐。
+    缓存命中一次性下发（SWR 后台重搜同 JSON 接口）；实时搜索流结束后按同口径回填缓存。"""
+    async def gen():
+        def sse(ev: dict) -> str:
+            return f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+        dev = active_device()
+        if dev is None or not dev.online:
+            yield sse({"type": "error", "deviceOnline": False, "error": "设备未连接，请打开 App 并保持前台运行"})
+            yield sse({"type": "done", "searched": 0})
+            return
+        key = _norm_wd(wd)
+        now = time.time()
+        cached = database.get_search_cache(dev.id, key)
+        if cached and now - cached["created_at"] < SEARCH_CACHE_TTL:
+            if now - max(cached["created_at"], cached["last_checked"]) >= SEARCH_RECHECK:
+                _kick_revalidate(dev.id, key)
+            disabled = database.get_disabled_site_keys()
+            data = json.loads(cached["results"])
+            results = [m for m in data.get("results", []) if m.get("siteKey") not in disabled]
+            yield sse({"type": "meta", "sites": data.get("searched", 0), "cached": True})
+            if results:
+                yield sse({"type": "site", "matched": results})
+            yield sse({"type": "done", "searched": data.get("searched", 0), "cached": True})
+            return
+        matched, searched = [], 0
+        try:
+            async for ev in _live_search_events(wd):
+                if ev["type"] == "site":
+                    matched.extend(ev["matched"])
+                elif ev["type"] == "done":
+                    searched = ev["searched"]
+                yield sse(ev)
+        except RuntimeError as e:
+            yield sse({"type": "error", "error": str(e)})
+            return
+        matched.sort(key=lambda m: -m["score"])
+        del matched[60:]
+        done_at = time.time()
+        payload = json.dumps({"results": matched, "searched": searched}, ensure_ascii=False)
+        database.set_search_cache(dev.id, key, wd, payload, done_at, done_at)
+        if secrets.randbelow(10) == 0:
+            database.clean_search_cache(done_at - SEARCH_CACHE_TTL)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 class AdoptBody(BaseModel):
@@ -566,7 +643,7 @@ async def resource_scan(body: ScanBody):
             continue
         seen.add(c.key)
         matches.append({"key": c.key, "id": c.id, "name": c.name})
-    del matches[15:]  # 候选站点上限，防止探测规模失控
+    del matches[SCAN_SITES_CAP:]  # 候选站点上限（早停机制下放宽到 30，防极端配置探测规模失控）
     if not matches:
         return {"error": "没有可探测的候选源"}
     scan_id = await start_scan(matches, body.refDurationS)

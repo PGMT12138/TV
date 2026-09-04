@@ -259,6 +259,7 @@ export interface ScanState {
   total: number;
   finished: number;
   results: ScanCandidateResult[];
+  stoppedEarly?: boolean;     // 达标即停：已锁定足够高质量线路，剩余站点未探测（选源弹窗可懒补测）
   userPicked?: boolean;       // 用户手动换源后本影片不再自动切
   switched?: boolean;         // 已执行过自动切换
   recommendedKey?: string;    // `${siteKey}::${flag}`
