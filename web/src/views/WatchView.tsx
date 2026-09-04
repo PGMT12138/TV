@@ -263,26 +263,26 @@ export const WatchView: React.FC = () => {
   // Resume progress from history if available（换源后集 id 会变，按集数号兜底匹配）
   useEffect(() => {
     const saved =
-      watchHistory.find((h) => h.movieId === movie.id && h.episodeId === currentEpisode?.id) ||
+      watchHistory.find((h) => h.movieId === movieId && h.episodeId === currentEpisode?.id) ||
       (currentEpisode
-        ? watchHistory.find((h) => h.movieId === movie.id && h.episodeNumber === currentEpisode.number)
+        ? watchHistory.find((h) => h.movieId === movieId && h.episodeNumber === currentEpisode.number)
         : undefined);
     if (saved && saved.watchedSeconds > 5 && videoRef.current) {
       videoRef.current.currentTime = saved.watchedSeconds;
       setCurrentTime(saved.watchedSeconds);
       showToast(`已为您恢复到上次观看进度：${formatTime(saved.watchedSeconds)}`, 'info');
     }
-  }, [movie.id, currentEpisode?.id]);
+  }, [movieId, currentEpisode?.id]);
 
   // Record progress periodically
   useEffect(() => {
     const timer = setInterval(() => {
       if (videoRef.current && !videoRef.current.paused && duration > 0 && currentEpisode) {
-        recordWatchProgress(movie.id, currentEpisode.id, videoRef.current.currentTime, duration);
+        recordWatchProgress(movieId, currentEpisode.id, videoRef.current.currentTime, duration);
       }
     }, 4000);
     return () => clearInterval(timer);
-  }, [movie.id, currentEpisode?.id, duration, recordWatchProgress]);
+  }, [movieId, currentEpisode?.id, duration, recordWatchProgress]);
 
   // 大屏下影片信息卡高度与播放器保持一致（宽度/窗口变化时跟随，内容超出时卡内滚动）
   useEffect(() => {
