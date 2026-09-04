@@ -48,6 +48,7 @@ FLAG_LATE_HINTS = ("爱奇艺", "优酷", "腾讯", "mgtv", "bilibili", "哔哩"
                    "解析", "花絮", "预告", "可下载", "备用", "有广告")
 PLAYLIST_CAP = 2 * 1024 * 1024
 SEGMENT_CAP = 1536 * 1024
+FILE_FFPROBE_CAP = 16 * 1024 * 1024  # MP4 直链补读上限：网盘转存文件的 moov 盒可远超 2MB（实测夸克 4K 线 5.7MB）
 TMP_DIR = os.path.join(os.path.dirname(__file__), "data", "tmp")
 
 FFPROBE = shutil.which("ffprobe")
@@ -562,7 +563,7 @@ async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
                 or ".m3u8" in (pl.get("url") or url).lower()):
             return await _probe_hls(cand, url, headers, local, pl, open_ms, ref_s)
         if ctype.startswith(("video/", "audio/")) or any(ext in url.lower() for ext in FILE_EXTS):
-            return await _probe_file(cand, pl, open_ms, redirects, ref_s)
+            return await _probe_file(cand, url, headers, local, pl, open_ms, redirects, ref_s)
         _stats_insert(site_key, False, "", None, None)
         return _fail(cand, f"非媒体地址({pl['ctype'] or '未知类型'})")
     except Exception as e:
@@ -673,10 +674,40 @@ async def _probe_hls(cand: dict, url: str, headers: dict, local: bool, pl: dict,
     }, ref_s)
 
 
-async def _probe_file(cand: dict, pl: dict, open_ms: int, redirects: list[str],
-                      ref_s: float | None = None) -> dict:
+def _mp4_moov_end(data: bytes) -> int | None:
+    """遍历顶层 box，返回 moov 盒结束偏移（faststart 文件 moov 在头部）。
+    用于宽高补读：moov 在 mdat 之后（文件尾）或结构异常时返回 None。size=0/1 的非常规盒直接放弃。"""
+    off = 0
+    while off + 8 <= len(data):
+        size = int.from_bytes(data[off:off + 4], "big")
+        typ = data[off + 4:off + 8]
+        if size == 0:
+            break
+        if size < 8:
+            return None
+        if typ == b"moov":
+            return off + size
+        if typ == b"mdat":
+            return None
+        off += size
+    return None
+
+
+async def _probe_file(cand: dict, url: str, headers: dict, local: bool, pl: dict, open_ms: int,
+                      redirects: list[str], ref_s: float | None = None) -> dict:
     mbps = round(len(pl["data"]) * 8 / pl["elapsed"] / 1e6, 2) if pl["elapsed"] > 0.05 else 0.0
     info = await _ffprobe(pl["data"]) or {}
+    if not info.get("height"):
+        # 截断的 moov 让 ffprobe 报 Invalid data（宽高未知）：按盒头读出 moov 实际结束位，
+        # 有界补下载到覆盖完整 moov 再重试一次；常规 2MB 够用的文件不多耗一字节流量
+        moov_end = _mp4_moov_end(pl["data"])
+        if moov_end and len(pl["data"]) < moov_end <= FILE_FFPROBE_CAP:
+            try:
+                pl2 = await _fetch(url, headers, moov_end, local=local)
+                if pl2["status"] < 400:
+                    info = await _ffprobe(pl2["data"]) or info
+            except Exception:
+                pass
     return _finish(cand, {
         "openMs": open_ms, "ttfbS": round(pl["ttfb"], 3),
         "firstFrameS": round(open_ms / 1000 + pl["elapsed"], 2),
