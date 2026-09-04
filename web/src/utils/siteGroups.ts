@@ -1,5 +1,6 @@
 // 站点分组分类（按智能选源探测结果），播放页选源弹窗使用
 import { ResourceMatch, ScanCandidateResult } from '../types';
+import { compareRecommended } from './scanFormat';
 
 // 分组定义（顺序即展示顺序）
 export const SITE_GROUP_DEFS = [
@@ -80,7 +81,12 @@ export function classifySites(
     groups[group].push(e);
   }
   for (const key of Object.keys(groups)) {
-    groups[key].sort((a, b) => (b.best?.metrics?.scores.total ?? -1) - (a.best?.metrics?.scores.total ?? -1));
+    // 推荐组：清晰度优先（慢线靠后，同清晰度按综合分）——与播放页推荐线路条同规则
+    if (key === 'recommended') {
+      groups[key].sort((a, b) => compareRecommended(a.best!, b.best!));
+    } else {
+      groups[key].sort((a, b) => (b.best?.metrics?.scores.total ?? -1) - (a.best?.metrics?.scores.total ?? -1));
+    }
   }
   return { groups, medianDur };
 }

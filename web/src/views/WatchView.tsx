@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../api';
 import { Episode, ScanCandidateResult, ScanMetrics, scanResultKey } from '../types';
-import { fmtSpeed, fmtRes, AD_LABEL } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, AD_LABEL, compareRecommended } from '../utils/scanFormat';
 import { SourcePickerModal } from '../components/SourcePickerModal';
 import { MetricBadges } from '../components/MetricBadges';
 import Hls from 'hls.js';
@@ -452,18 +452,12 @@ export const WatchView: React.FC = () => {
   const flagResult = (flag: string) =>
     scan?.results.find((r) => r.siteKey === resource?.selected?.siteKey && !!r.flag && r.flag === flag);
 
-  // 推荐线路：按综合评分排序（后端 recommendedKey 置顶），最多 3 条；
+  // 推荐线路：清晰度优先排序（吞吐 <3Mb/s 的慢线靠后），最多 3 条；
   // 不排除当前线路——它排进前 3 时在卡片右侧标记已选择
-  const topLines = (() => {
-    const list = (scan?.results || [])
-      .filter((r) => r.status === 'ok' && r.flag && r.metrics)
-      .sort((a, b) => b.metrics!.scores.total - a.metrics!.scores.total);
-    if (scan?.recommendedKey) {
-      const idx = list.findIndex((r) => scanResultKey(r) === scan.recommendedKey);
-      if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
-    }
-    return list.slice(0, 3);
-  })();
+  const topLines = (scan?.results || [])
+    .filter((r) => r.status === 'ok' && r.flag && r.metrics)
+    .sort(compareRecommended)
+    .slice(0, 3);
 
   const applySource = async (siteKey: string, flag: string | undefined, manual = true) => {
     if (!resource) return;
@@ -1009,7 +1003,7 @@ export const WatchView: React.FC = () => {
                   <span className="text-[10px] text-zinc-500 shrink-0 whitespace-nowrap">
                     {scan?.status === 'running'
                       ? '测速中 · 实时更新'
-                      : `按综合评分排序 · 共 ${scan!.results.filter((r) => r.status === 'ok' && r.flag).length} 条可用`}
+                      : `清晰度优先排序 · 共 ${scan!.results.filter((r) => r.status === 'ok' && r.flag).length} 条可用`}
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
