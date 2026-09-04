@@ -27,8 +27,8 @@ from database import get_conn
 from bridge import active_device, call_device, _ids
 
 PROBE_TTL = 6 * 3600          # 探测结果缓存时长：采集站源时效性强
-PROBE_VER = 2                 # 探测能力版本：变更时 bump，旧版本缓存视为过期自愈重探
-                              # v2 = m3u8 302 拼接修复 + MP4 大 moov 补读（此前"未知"清晰度的存量缓存全部失效）
+PROBE_VER = 3                 # 探测能力版本：变更时 bump，旧版本缓存视为过期自愈重探
+                              # v2 = m3u8 302 拼接修复 + MP4 大 moov 补读；v3 = moov 在文件尾的 Range 回读
 PLAYER_TIMEOUT = 25.0         # playerContent 最长等待（含 WebView 嗅探/网盘转存）
 FETCH_TIMEOUT = 15.0
 DETAIL_TIMEOUT = 20.0
@@ -51,6 +51,7 @@ FLAG_LATE_HINTS = ("爱奇艺", "优酷", "腾讯", "mgtv", "bilibili", "哔哩"
 PLAYLIST_CAP = 2 * 1024 * 1024
 SEGMENT_CAP = 1536 * 1024
 FILE_FFPROBE_CAP = 16 * 1024 * 1024  # MP4 直链补读上限：网盘转存文件的 moov 盒可远超 2MB（实测夸克 4K 线 5.7MB）
+TAIL_FFPROBE_CAP = 6 * 1024 * 1024   # moov 在文件尾时的 Range 后缀回读上限（剧集单集 moov 实测数 MB 内）
 TMP_DIR = os.path.join(os.path.dirname(__file__), "data", "tmp")
 
 FFPROBE = shutil.which("ffprobe")
@@ -421,8 +422,9 @@ def _cache_get(site_key: str, flag: str, episode_id: str) -> dict | None:
         conn.close()
         if row and time.time() - row["created_at"] < PROBE_TTL:
             metrics = json.loads(row["metrics"])
-            if metrics.get("v") != PROBE_VER:
-                return None  # 旧探测能力写入的缓存（如缺清晰度），重探一次自愈
+            # 版本不符视为过期重探自愈；v2 起已有清晰度的条目继续有效（v3 只补尾部 moov 能力）
+            if metrics.get("v") != PROBE_VER and not (metrics.get("v", 0) >= 2 and metrics.get("height")):
+                return None
             metrics["cached"] = True
             return metrics
     except Exception:
@@ -698,19 +700,74 @@ def _mp4_moov_end(data: bytes) -> int | None:
     return None
 
 
+async def _fetch_tail(url: str, headers: dict, cap: int) -> tuple[int, bytes] | None:
+    """Range 后缀回读文件尾部（仅直连路径）。返回 (文件总长, 尾部字节)；
+    源站不支持 Range（回 200 全量）或异常时返回 None。"""
+    client = _http_client()
+    try:
+        resp = await client.send(client.build_request(
+            "GET", url, headers={**dict(headers), "Range": f"bytes=-{cap}"}), stream=True)
+    except Exception:
+        return None
+    try:
+        if resp.status_code != 206:
+            return None
+        cr = resp.headers.get("content-range", "")
+        total = int(cr.rsplit("/", 1)[-1]) if "/" in cr else 0
+        parts, got = [], 0
+        async for chunk in resp.aiter_bytes(65536):
+            parts.append(chunk)
+            got += len(chunk)
+        return total, b"".join(parts)
+    except Exception:
+        return None
+    finally:
+        await resp.aclose()
+
+
+def _tail_moov_synth(head: bytes, tail: bytes, total: int) -> bytes | None:
+    """从尾部字节中解析末尾的 moov 顶层盒，与头部 ftyp 拼成最小可解析 MP4。
+    校验盒大小与文件总长对齐（moov 为最后一盒，或其后仅挂 ≤64B 的 free 小盒），
+    防止媒体数据里 'moov' 字样的误匹配。"""
+    ftyp_size = int.from_bytes(head[:4], "big")
+    if not 8 <= ftyp_size <= 64:
+        return None
+    pos = len(tail)
+    while True:
+        idx = tail.rfind(b"moov", 4, pos)
+        if idx < 4:
+            return None
+        size = int.from_bytes(tail[idx - 4:idx], "big")
+        start_in_file = total - len(tail) + idx - 4
+        end = start_in_file + size
+        if 8 <= size <= len(tail) and (end == total or 0 < total - end <= 64):
+            return head[:ftyp_size] + tail[idx - 4:idx - 4 + size]
+        pos = idx
+
+
 async def _probe_file(cand: dict, url: str, headers: dict, local: bool, pl: dict, open_ms: int,
                       redirects: list[str], ref_s: float | None = None) -> dict:
     mbps = round(len(pl["data"]) * 8 / pl["elapsed"] / 1e6, 2) if pl["elapsed"] > 0.05 else 0.0
     info = await _ffprobe(pl["data"]) or {}
     if not info.get("height"):
-        # 截断的 moov 让 ffprobe 报 Invalid data（宽高未知）：按盒头读出 moov 实际结束位，
-        # 有界补下载到覆盖完整 moov 再重试一次；常规 2MB 够用的文件不多耗一字节流量
+        # 截断的 moov 让 ffprobe 报 Invalid data（宽高未知）。两种补救：
+        # ① faststart：moov 在头部但超过 2MB 下载上限——按盒头读出结束位补下载；
+        # ② moov 在文件尾（mdat 在前）：Range 后缀回读尾部，拼 ftyp+moov 合成最小 MP4 再读
         moov_end = _mp4_moov_end(pl["data"])
         if moov_end and len(pl["data"]) < moov_end <= FILE_FFPROBE_CAP:
             try:
                 pl2 = await _fetch(url, headers, moov_end, local=local)
                 if pl2["status"] < 400:
                     info = await _ffprobe(pl2["data"]) or info
+            except Exception:
+                pass
+        elif not local and pl["data"][4:8] == b"ftyp":
+            try:
+                tail = await _fetch_tail(url, headers, TAIL_FFPROBE_CAP)
+                if tail:
+                    synth = _tail_moov_synth(pl["data"], tail[1], tail[0])
+                    if synth:
+                        info = await _ffprobe(synth) or info
             except Exception:
                 pass
     return _finish(cand, {
