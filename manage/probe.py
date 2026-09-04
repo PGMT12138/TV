@@ -27,6 +27,8 @@ from database import get_conn
 from bridge import active_device, call_device, _ids
 
 PROBE_TTL = 6 * 3600          # 探测结果缓存时长：采集站源时效性强
+PROBE_VER = 2                 # 探测能力版本：变更时 bump，旧版本缓存视为过期自愈重探
+                              # v2 = m3u8 302 拼接修复 + MP4 大 moov 补读（此前"未知"清晰度的存量缓存全部失效）
 PLAYER_TIMEOUT = 25.0         # playerContent 最长等待（含 WebView 嗅探/网盘转存）
 FETCH_TIMEOUT = 15.0
 DETAIL_TIMEOUT = 20.0
@@ -419,6 +421,8 @@ def _cache_get(site_key: str, flag: str, episode_id: str) -> dict | None:
         conn.close()
         if row and time.time() - row["created_at"] < PROBE_TTL:
             metrics = json.loads(row["metrics"])
+            if metrics.get("v") != PROBE_VER:
+                return None  # 旧探测能力写入的缓存（如缺清晰度），重探一次自愈
             metrics["cached"] = True
             return metrics
     except Exception:
@@ -429,6 +433,7 @@ def _cache_get(site_key: str, flag: str, episode_id: str) -> dict | None:
 def _cache_set(site_key: str, flag: str, episode_id: str, metrics: dict):
     try:
         conn = get_conn()
+        metrics = {**metrics, "v": PROBE_VER}
         conn.execute("INSERT OR REPLACE INTO probe_cache (site_key, flag, episode_id, metrics, created_at) "
                      "VALUES (?, ?, ?, ?, ?)",
                      (site_key, flag, episode_id, json.dumps(metrics, ensure_ascii=False), time.time()))
