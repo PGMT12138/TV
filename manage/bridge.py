@@ -15,6 +15,9 @@ import base64
 import itertools
 import json
 import os
+import shutil
+import subprocess
+from collections import OrderedDict
 from http import HTTPStatus
 from urllib.parse import quote, urljoin, urlparse
 
@@ -31,6 +34,76 @@ BRIDGE_TOKEN = os.environ.get("BRIDGE_TOKEN", "")  # 为空则不校验（本机
 TIMEOUT_CMD = 90.0  # playerContent 可能很慢（网盘转存等）
 CHUNK = 65536
 HELLO_TIMEOUT = 10.0  # 等待连接首帧 hello 的超时
+
+# ---------------- EAC3/AC3 音频转码（服务端兜底，让无 Dolby 解码的浏览器也能播） ----------------
+# 浏览器 MSE 对 EAC3 支持参差（专利原因 Chromium 不内置、委托系统解码，IAB/Electron 常缺失）。
+# ts 分片代理时轻量探测音频流：发现 eac3/ac3 就挂 ffmpeg 流式管道只转音频（-c:v copy 视频
+# 零转码，实测 60s 分片 ~0.9s 转完，CPU 占用可忽略）；判定结果按分片 URL 记忆避免每个分片重复探测。
+FFMPEG = shutil.which("ffmpeg")
+AUDIO_TRANSCODE_PROBE = 256 * 1024      # 探测头部字节数：TS 包 188B 对齐 + PAT/PMT/首 PES，足够 ffprobe 识别流
+_TRANSCODE_CACHE_MAX = 4096
+_transcode_cache: "OrderedDict[str, bool]" = OrderedDict()  # 分片 URL → 是否需要转音频（LRU）
+
+
+def _need_audio_transcode(url: str) -> bool:
+    cached = _transcode_cache.get(url)
+    if cached is not None:
+        _transcode_cache.move_to_end(url)
+        return cached
+    return False  # 未探测过的分片默认不转，由 _sniff_audio_transcode 探测后回填
+
+
+def _mark_audio_transcode(url: str, needed: bool):
+    _transcode_cache[url] = needed
+    _transcode_cache.move_to_end(url)
+    while len(_transcode_cache) > _TRANSCODE_CACHE_MAX:
+        _transcode_cache.popitem(last=False)
+
+
+def _sniff_audio_transcode(data: bytes) -> bool:
+    """ffprobe 读头部字节判断是否含 EAC3/AC3 音频流（数据不足/探测失败一律按不转处理）。"""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe or len(data) < 4096:
+        return False
+    path = os.path.join(os.environ.get("TEMP", "/tmp"), f"sniff_{next(_ids)}.bin")
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+        out = subprocess.run(
+            [ffprobe, "-v", "quiet", "-print_format", "json",
+             "-show_entries", "stream=codec_name,codec_type", path],
+            capture_output=True, timeout=10).stdout
+        for st in (json.loads(out or b"{}").get("streams") or []):
+            if st.get("codec_type") == "audio" and str(st.get("codec_name") or "").lower() in ("eac3", "ac3"):
+                return True
+    except Exception:
+        return False
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return False
+
+
+def _ffmpeg_audio_pipe() -> subprocess.Popen | None:
+    """起 ffmpeg：TS 从 stdin 读，视频 copy 音频转 AAC 写 stdout（流式，边下边转边出）。
+    -copyts 必须加：mpegts muxer 默认把输出时间戳平移到 ~0 起，而分片是各自独立转码的，
+    平移后跨分片 PTS 全部跳回起点，hls.js 的连续化处理失效（缓冲倒退卡住）；保留源时间轴
+    （源分片间本就连续）则与不转码时行为一致。muxdelay/muxpreload 归零避免 muxer 加偏移。
+    失败返回 None（调用方回退透传）。"""
+    if not FFMPEG:
+        return None
+    try:
+        return subprocess.Popen(
+            [FFMPEG, "-v", "error", "-i", "pipe:0",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
+             "-copyts", "-muxdelay", "0", "-muxpreload", "0",
+             "-f", "mpegts", "pipe:1"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            bufsize=0)
+    except Exception:
+        return None
 
 _ids = itertools.count(1)
 
@@ -206,6 +279,11 @@ async def api_player(request: Request, key: str, flag: str = "", id: str = ""):
         data = await call_device("player", {"key": key, "flag": flag, "id": id})
     except RuntimeError as e:
         return {"error": str(e)}
+    url = (data.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        # 部分采集站选集 playUrl 带时效 token，过期后设备会把原始 id 原样透传当 url；
+        # 喂给 /stream 必失败，按解析失败处理（前端会自动重拉详情换新 token 重试）
+        return {"error": "线路解析失败，选集令牌可能已过期"}
     prefix = request.scope.get("root_path", "")
     headers = data.get("headers") or {}
     h64 = base64.b64encode(json.dumps(headers).encode()).decode()
@@ -318,10 +396,100 @@ async def _stream_direct(request: Request, url: str, headers: dict, h: str):
         if name in resp.headers:
             out_headers[name] = resp.headers[name]
 
+    # ---- EAC3/AC3 音频兜底转码（仅 ts 分片，m3u8 上面已返回）----
+    # 已知要转：直接挂 ffmpeg 流式管道；未探测过：先读头部若干字节给 ffprobe 识别，
+    # 结论记 LRU（同分片下次直接走对应分支），不需要转则把头部字节原样续传零开销。
+    # 注意 CDN 常把 .ts 302 到无后缀地址（实测 meilinvps /dsp-file-xxx + binary/octet-stream），
+    # 所以原始 url 和最终地址都要看
+    content_type_lower = content_type.lower()
+    looks_like_ts = ("mp2t" in content_type_lower
+                     or ".ts" in urlparse(url).path or ".ts" in urlparse(final_url).path)
+    transcode = False
+    head_chunk = b""
+    seg_iter = None
+    if looks_like_ts and not ("Content-Range" in out_headers or "Range" in (request.headers or {})):
+        if _need_audio_transcode(final_url):
+            transcode = True
+        else:
+            # httpx 的 aiter_bytes 每响应只能消费一次（二次调用抛 StreamConsumed）——
+            # 探测与后续转码泵必须共用同一个迭代器
+            seg_iter = resp.aiter_bytes(chunk_size=CHUNK)
+            try:
+                while len(head_chunk) < AUDIO_TRANSCODE_PROBE:
+                    try:
+                        head_chunk += await asyncio.wait_for(seg_iter.__anext__(), timeout=15)
+                    except StopAsyncIteration:
+                        break
+            except Exception:
+                head_chunk = b""
+            if head_chunk:
+                transcode = _sniff_audio_transcode(head_chunk)
+                _mark_audio_transcode(final_url, transcode)
+
+    if transcode:
+        proc = _ffmpeg_audio_pipe()
+        if proc is not None:
+            async def gen_transcode():
+                loop = asyncio.get_running_loop()
+                proc_stdin = proc.stdin
+                proc_stdout = proc.stdout
+                assert proc_stdin and proc_stdout
+
+                # 源读取在 httpx 异步栈，ffmpeg 写入用线程池搬运（Popen 的 stdin/stdout 是阻塞 IO）；
+                # seg_iter 非空说明探测阶段已消费过流，继续用它（httpx 流只能消费一次），
+                # 为空（缓存命中直接转码）则从响应开头取新迭代器
+                async def pump():
+                    try:
+                        nonlocal seg_iter
+                        if head_chunk:
+                            await loop.run_in_executor(None, proc_stdin.write, head_chunk)
+                        if seg_iter is None:
+                            seg_iter = resp.aiter_bytes(chunk_size=CHUNK)
+                        async for chunk in seg_iter:
+                            await loop.run_in_executor(None, proc_stdin.write, chunk)
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            await loop.run_in_executor(None, proc_stdin.close)
+                        except Exception:
+                            pass
+
+                pump_task = asyncio.create_task(pump())
+                try:
+                    while True:
+                        out = await loop.run_in_executor(None, proc_stdout.read, 65536)
+                        if not out:
+                            break
+                        yield out
+                finally:
+                    pump_task.cancel()
+                    for f in (proc_stdin, proc_stdout):
+                        try:
+                            f.close()
+                        except Exception:
+                            pass
+                    proc.kill()
+                    await resp.aclose()
+                    await client.aclose()
+
+            out_headers.pop("Content-Length", None)  # 转码后长度不可预知
+            out_headers["Cache-Control"] = "no-store"
+            return StreamingResponse(gen_transcode(), status_code=_safe_status(resp.status_code),
+                                     media_type="video/mp2t", headers=out_headers)
+
     async def gen():
         try:
-            async for chunk in resp.aiter_bytes(chunk_size=CHUNK):
-                yield chunk
+            # 探测阶段读掉的头部字节必须先补回去（transcode=False 时走到这里），否则分片损坏；
+            # 流可能已被探测消费过一部分，继续用 seg_iter 而不是再建 aiter_bytes（只能消费一次）
+            if head_chunk:
+                yield head_chunk
+            if seg_iter is not None:
+                async for chunk in seg_iter:
+                    yield chunk
+            else:
+                async for chunk in resp.aiter_bytes(chunk_size=CHUNK):
+                    yield chunk
         finally:
             await resp.aclose()
             await client.aclose()
@@ -372,8 +540,83 @@ async def _stream_via_device(request: Request, url: str, headers: dict, h: str):
             if name in meta_headers:
                 out_headers[name] = meta_headers[name]
 
+        # ---- EAC3/AC3 音频兜底转码（设备路径，仅 ts 分片）----
+        # 队列里拿头部探测字节（不足则多取几块），判定与直连路径同一份 LRU；
+        # 原始 url 与最终地址 base 都查 .ts（CDN 302 会丢后缀）
+        ct_lower = content_type.lower()
+        looks_like_ts = ("mp2t" in ct_lower
+                         or ".ts" in urlparse(url).path or ".ts" in urlparse(base).path)
+        transcode = False
+        head_chunk = b""
+        if looks_like_ts:
+            if _need_audio_transcode(base):
+                transcode = True
+            else:
+                try:
+                    while len(head_chunk) < AUDIO_TRANSCODE_PROBE:
+                        item = await asyncio.wait_for(q.get(), timeout=TIMEOUT_CMD)
+                        if item is None or isinstance(item, dict):
+                            break
+                        head_chunk += item
+                except asyncio.TimeoutError:
+                    head_chunk = b""
+                if head_chunk:
+                    transcode = _sniff_audio_transcode(head_chunk)
+                    _mark_audio_transcode(base, transcode)
+
+        if transcode:
+            proc = _ffmpeg_audio_pipe()
+            if proc is not None:
+                async def gen_transcode_dev():
+                    loop = asyncio.get_running_loop()
+                    proc_stdin = proc.stdin
+                    proc_stdout = proc.stdout
+                    assert proc_stdin and proc_stdout
+
+                    async def pump():
+                        try:
+                            if head_chunk:
+                                await loop.run_in_executor(None, proc_stdin.write, head_chunk)
+                            while True:
+                                item = await q.get()
+                                if item is None or isinstance(item, dict):
+                                    return
+                                await loop.run_in_executor(None, proc_stdin.write, item)
+                        except Exception:
+                            pass
+                        finally:
+                            try:
+                                await loop.run_in_executor(None, proc_stdin.close)
+                            except Exception:
+                                pass
+
+                    pump_task = asyncio.create_task(pump())
+                    try:
+                        while True:
+                            out = await loop.run_in_executor(None, proc_stdout.read, 65536)
+                            if not out:
+                                break
+                            yield out
+                    finally:
+                        pump_task.cancel()
+                        for f in (proc_stdin, proc_stdout):
+                            try:
+                                f.close()
+                            except Exception:
+                                pass
+                        proc.kill()
+                        dev.streams.pop(rid, None)
+
+                out_headers.pop("Content-Length", None)
+                out_headers["Cache-Control"] = "no-store"
+                return StreamingResponse(gen_transcode_dev(), status_code=_safe_status(status),
+                                         media_type="video/mp2t", headers=out_headers)
+
         async def gen():
             try:
+                # 探测阶段消费掉的头部字节先补回（transcode=False 走到这里），否则分片损坏
+                if head_chunk:
+                    yield head_chunk
                 while True:
                     item = await q.get()
                     if item is None or isinstance(item, dict):  # 断开 / end / error

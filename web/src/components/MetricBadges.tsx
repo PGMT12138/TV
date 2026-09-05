@@ -2,9 +2,9 @@
 // WatchView 当前线路与推荐线路共用；live 模式只出速度/清晰度（直播无广告/时长维度，LiveView 用），
 // compact 为下拉按钮/列表行内的小号变体；title 提供指标含义与探测证据说明
 import React from 'react';
-import { Gauge, MonitorPlay, ShieldCheck, ShieldAlert, ShieldX, Clock } from 'lucide-react';
+import { Gauge, MonitorPlay, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle } from 'lucide-react';
 import type { ScanMetrics } from '../types';
-import { fmtSpeed, fmtRes } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, isUnsupportedCodec, isMobileDevice } from '../utils/scanFormat';
 
 type BadgeMetrics = Partial<ScanMetrics>;
 
@@ -39,6 +39,24 @@ export const MetricBadges: React.FC<{
         <MonitorPlay className={ic} />
         {fmtRes(metrics.height || 0)}
       </span>
+      {isUnsupportedCodec(metrics.codec) && (
+        <span
+          className={`${pill} bg-amber-500/15 text-amber-300 border-amber-500/40`}
+          title={`${metrics.codec} 视频：当前浏览器不支持解码，选择后可能一直显示加载中（EAC3 音频已由服务端转码兜底，不影响）`}
+        >
+          <AlertTriangle className={ic} />
+          播不了
+        </span>
+      )}
+      {metrics.moovEnd && isMobileDevice() && (
+        <span
+          className={`${pill} bg-amber-500/15 text-amber-300 border-amber-500/40`}
+          title="整文件式 MP4 且索引在文件尾：手机浏览器起播很慢（需顺序下载整个文件），建议换其他线路"
+        >
+          <AlertTriangle className={ic} />
+          起播慢
+        </span>
+      )}
       {!live && (
         <>
           <span className={`${pill} ${ad.cls}`} title={evidences ? `广告探测：${evidences}` : ad.tip}>

@@ -147,17 +147,7 @@ def init_db():
             PRIMARY KEY (user_id, subject_id)
         )
     """)
-    # 智能选源：线路探测结果缓存（TTL 见 probe.py）+ 站点滚动统计事件
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS probe_cache (
-            site_key TEXT NOT NULL,
-            flag TEXT NOT NULL,
-            episode_id TEXT NOT NULL,
-            metrics TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            PRIMARY KEY (site_key, flag, episode_id)
-        )
-    """)
+    # 智能选源：站点滚动统计事件
     conn.execute("""
         CREATE TABLE IF NOT EXISTS site_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

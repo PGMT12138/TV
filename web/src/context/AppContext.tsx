@@ -58,6 +58,7 @@ interface AppContextType {
   currentEpisodes: (movieId: string) => { flag: string; episodes: Episode[] } | null;
   startScan: (movieId: string) => void;
   probeSite: (movieId: string, siteKey: string) => void;  // 选源弹窗懒补测：单站重扫，结果并入现有扫描
+  reprobeSites: (movieId: string, siteKeys: string[]) => void; // 强制重探：全量实测不早停（全部/单站共用）
   probingSites: Set<string>;                              // 懒补测进行中的站点
   patchScan: (movieId: string, patch: Partial<ScanState>) => void;
   patchResource: (movieId: string, patch: Partial<ResourceState>) => void;
@@ -259,8 +260,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [showToast, waitDeviceOnline]);
 
   const resolveResources = useCallback(async (movieId: string) => {
-    const movie = moviesRef.current.find((m) => m.id === movieId);
-    if (!movie || resolvingRef.current.has(movieId)) return;
+    // 从历史/继续观看直达播放页时 movies 里还没有该片：loadMovieDetail 的 setMovies 要到
+    // 下一次渲染才同步进 moviesRef，同一微任务链里查 ref 会落空，静默 return 导致资源搜索
+    // 根本不发（播放页卡「正在搜索」假象）——这里兜底拉一次详情拿到 movie 再继续
+    let movie = moviesRef.current.find((m) => m.id === movieId);
+    if (!movie && !resolvingRef.current.has(movieId)) movie = await loadMovieDetail(movieId);
+    if (!movie) {
+      setResource(movieId, { status: 'error', error: '影片信息加载失败' });
+      return;
+    }
+    if (resolvingRef.current.has(movieId)) return;
     // 已解析完成或正在解析的影片直接复用，避免每次进入播放页都重搜一轮
     const existing = movieResourcesRef.current[movieId];
     if (existing && ['searching', 'selecting', 'ready'].includes(existing.status)) return;
@@ -319,6 +328,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setResource(movieId, { status: 'noresult', matches: [] });
         }
         onDecide?.();
+        // matches 至此已齐：若扫描已用早期快照跑完（只覆盖了部分站点），发起补充扫描。
+        // searchEnded 落 state 供"扫描结束"触发路径稍后从 ref 读到；本轮事实由参数传入
+        setResource(movieId, { searchEnded: true });
+        maybeExtendScanRef.current?.(movieId, 'search');
       } else if (ev.type === 'error') {
         streamEnded = true;
         if (!decided && !all.length) {
@@ -328,6 +341,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         tryDecide();
         onDecide?.();
+        setResource(movieId, { searchEnded: true });
+        maybeExtendScanRef.current?.(movieId, 'search');
       }
     });
 
@@ -350,9 +365,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     try {
       let flags = await fetchMatchFlags(movieId, best);
-      let restored = best === savedMatch && !!flags;
-      // 上次线路获取失败（站点失效/无线路）→ 自动换默认来源再试一次
-      if (!flags && best !== fallback && fallback) {
+      let restored = best === savedMatch && !!flags?.length;
+      // 上次线路获取失败（站点失效/无线路，含 flags 为空数组）→ 自动换默认来源再试一次；
+      // 空数组是 truthy，必须显式判 length，否则死在"没有可用选集"
+      if ((!flags || !flags.length) && best !== fallback && fallback) {
         showToast('上次线路暂时不可用，已为你更换来源', 'info');
         flags = await fetchMatchFlags(movieId, fallback);
       }
@@ -371,7 +387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       resolvingRef.current.delete(movieId);
     }
-  }, [fetchMatchFlags, showToast]);
+  }, [fetchMatchFlags, loadMovieDetail, showToast]);
 
   // 用户手动换源/换线路后，本影片不再执行自动切源
   const markScanUserPicked = useCallback((movieId: string) => {
@@ -405,6 +421,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ---- 智能选源扫描（SSE 渐进消费，结果按 siteKey::flag 幂等合并） ----
   const scanEsRef = useRef<EventSource | null>(null);
   const lazyEsRef = useRef<EventSource | null>(null);  // 懒补测独立流，不打断主扫描
+  // 搜索流结束后的补充扫描（冷搜渐进合并时首轮扫描只覆盖了部分站点）。
+  // 触发时机有二：搜索流结束 / 首轮扫描结束——本轮刚发生的事实必须由参数传入：
+  // setState 之后同步读 ref 拿不到刚写的状态（ moviesRef 时序坑同类），读 ref 必死
+  const maybeExtendScanRef = useRef<((movieId: string, justEnded: 'search' | 'scan') => void) | null>(null);
+  const extendingRef = useRef<Set<string>>(new Set());  // 已发起过补充扫描的影片，同步防重入
   useEffect(() => () => { scanEsRef.current?.close(); lazyEsRef.current?.close(); }, []);
 
   // 单条探测结果并入扫描状态（主扫描/懒补测共用）
@@ -427,8 +448,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // 消费一次扫描的 SSE 流。lazy=true 为选源弹窗的单站懒补测：只并入线路结果，
-  // 不动扫描状态与推荐键——避免补测完成误触发"自动切最优线路"打断用户正在看的线路
-  const openScanStream = useCallback((movieId: string, scanId: string, opts?: { lazy?: boolean; onDone?: () => void }) => {
+  // 不动扫描状态与推荐键——避免补测完成误触发"自动切最优线路"打断用户正在看的线路。
+  // extend=true 为搜索结束后的补充扫描：正常并入状态与推荐键，total 以已测数为基数累加
+  const openScanStream = useCallback((movieId: string, scanId: string, opts?: { lazy?: boolean; extend?: boolean; onDone?: () => void }) => {
     const lazy = !!opts?.lazy;
     const esRef = lazy ? lazyEsRef : scanEsRef;
     esRef.current?.close();
@@ -443,7 +465,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
       if (msg.type === 'meta') {
-        if (!lazy) patchScan(movieId, { total: msg.total || 0 });
+        if (!lazy) {
+          const base = opts?.extend ? (movieResourcesRef.current[movieId]?.scan?.finished || 0) : 0;
+          patchScan(movieId, { total: base + (msg.total || 0) });
+        }
       } else if (msg.type === 'result' && msg.result) {
         mergeScanResult(movieId, msg.result as ScanCandidateResult);
       } else if (msg.type === 'done') {
@@ -453,6 +478,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recommendedKey: msg.recommended || undefined,
           fastestKey: msg.fastest || undefined,
           highestKey: msg.highest || undefined,
+          extending: false,
         });
         es.close();
         if (esRef.current === es) esRef.current = null;
@@ -464,7 +490,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Date.now() - startedAt > 180_000) {
         es.close();
         if (esRef.current === es) esRef.current = null;
-        if (!lazy) patchScan(movieId, { status: 'done' });
+        if (!lazy) patchScan(movieId, { status: 'done', extending: false });
         opts?.onDone?.();
       }
     };
@@ -474,7 +500,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const startScan = useCallback((movieId: string) => {
     const res = movieResourcesRef.current[movieId];
     if (!res || res.status !== 'ready' || !res.matches?.length) return;
-    if (res.scan) return; // 已扫描过（running/done）不重扫，后端另有 6h 缓存兜底
+    if (res.scan) return; // 已扫描过（running/done）不重扫
     const seen = new Set<string>();
     const candidates = res.matches
       .filter((m) => (seen.has(m.siteKey) ? false : (seen.add(m.siteKey), true)))
@@ -501,7 +527,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
       patchScan(movieId, { scanId: r.scanId });
-      openScanStream(movieId, r.scanId);
+      openScanStream(movieId, r.scanId, { onDone: () => maybeExtendScanRef.current?.(movieId, 'scan') });
     }).catch(() => {
       showToast('智能选源启动失败', 'warning');
       setMovieResources((prev) => {
@@ -511,6 +537,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     });
   }, [patchScan, showToast, openScanStream]);
+
+  // ---- 补充扫描：聚合搜索结束后，对首轮扫描未覆盖的站点再跑一轮完整流程 ----
+  // 冷搜是 SSE 渐进合并，资源 ready 即触发 startScan 时往往只聚合了前一两个站点，
+  // 首轮早停后其余站点的 4K/蓝光/超清线路永远不会被探。此处等搜索流结束（或首轮
+  // 扫描结束、取两者较晚者）后，对 matches 里未探测的站点发起补充扫描：同样
+  // "优先线路全量实测 → 普通线路达标即停"，结果并入同一扫描状态并重新参与自动选优。
+  // justEnded 说明本轮刚结束的是哪件事——该事实刚 setState 完、同步读 ref 必为旧值，
+  // 只能由触发方以参数告知；另一条件是更早写入的，ref 里已是新值，安全
+  const maybeExtendScan = useCallback((movieId: string, justEnded: 'search' | 'scan') => {
+    if (extendingRef.current.has(movieId)) return;
+    const res = movieResourcesRef.current[movieId];
+    const searchEnded = justEnded === 'search' || !!res?.searchEnded;
+    const scanDone = justEnded === 'scan' || res?.scan?.status === 'done';
+    if (!searchEnded || !scanDone || !res?.scan) return;
+    const scanned = new Set(res.scan.results.map((r) => r.siteKey));
+    const seen = new Set<string>();
+    const cands = res.matches
+      .filter((m) => !scanned.has(m.siteKey) && !seen.has(m.siteKey) && (seen.add(m.siteKey), true))
+      .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
+    if (!cands.length) return;
+    extendingRef.current.add(movieId);
+    const movie = moviesRef.current.find((m) => m.id === movieId);
+    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
+    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    // 此前各轮已实测的线路结果随请求带给后端：优先额度跨扫描封顶 + 早停/推荐键全局评估
+    const prior = res.scan.results;
+    // 回到 running 态并重置已切标记：补充测完后按新推荐键重新自动选优；
+    // 当前线路仍视为临时（provisional），全部测完即切全局最优
+    patchScan(movieId, { status: 'running', switched: undefined, extending: true });
+    patchResource(movieId, { provisional: true });
+    showToast(`正在补充探测其余 ${cands.length} 个站点的线路…`, 'info');
+    api.resourceScan(cands, refDurationS, false, prior).then((r) => {
+      if (r.error || !r.scanId) {
+        extendingRef.current.delete(movieId);
+        patchScan(movieId, { status: 'done', extending: false });
+        showToast(`补充探测启动失败：${r.error || '未知错误'}`, 'warning');
+        return;
+      }
+      openScanStream(movieId, r.scanId, { extend: true });
+    }).catch(() => {
+      extendingRef.current.delete(movieId);
+      patchScan(movieId, { status: 'done', extending: false });
+      showToast('补充探测启动失败', 'warning');
+    });
+  }, [patchScan, patchResource, openScanStream, showToast]);
+  maybeExtendScanRef.current = maybeExtendScan;
 
   // ---- 懒补测：选源弹窗对单个未探测站点发起补扫，结果渐进并入 ----
   const [probingSites, setProbingSites] = useState<Set<string>>(new Set());
@@ -532,6 +604,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       next.delete(siteKey);
       return next;
     });
+    // 手动补测不带 prior：独立探测该站，不受全局额度/达标短路影响
     api.resourceScan([{ key: match.siteKey, id: match.vodId, name: match.siteName }], refDurationS).then((r) => {
       if (r.error || !r.scanId) {
         finish();
@@ -544,6 +617,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast('补测启动失败', 'warning');
     });
   }, [showToast, openScanStream]);
+
+  // ---- 强制重探：逐线全量实测、不做达标即停（选源弹窗"重新探测"按钮用）。
+  // 与懒补测一样走 lazy 流渐进并入现有扫描，不动推荐键，不触发自动切源 ----
+  const reprobeSites = useCallback((movieId: string, siteKeys: string[]) => {
+    const res = movieResourcesRef.current[movieId];
+    if (!res?.matches?.length || !siteKeys.length) return;
+    if (res.scan?.status === 'running') {
+      showToast('智能测速进行中，稍后可再重探', 'info');
+      return;
+    }
+    if (probingSites.size > 0) {
+      showToast('有探测正在进行中，请稍候', 'info');
+      return;
+    }
+    const seen = new Set<string>();
+    const cands = siteKeys
+      .map((k) => res.matches!.find((m) => m.siteKey === k))
+      .filter((m): m is ResourceMatch => !!m)
+      .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }))
+      .filter((c) => (seen.has(c.key) ? false : (seen.add(c.key), true)));
+    if (!cands.length) return;
+    setProbingSites(new Set(cands.map((c) => c.key)));
+    const movie = moviesRef.current.find((m) => m.id === movieId);
+    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
+    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const finish = () => setProbingSites(new Set());
+    api.resourceScan(cands, refDurationS, true).then((r) => {
+      if (r.error || !r.scanId) {
+        finish();
+        showToast(`重新探测启动失败：${r.error || '未知错误'}`, 'warning');
+        return;
+      }
+      openScanStream(movieId, r.scanId, { lazy: true, onDone: finish });
+    }).catch(() => {
+      finish();
+      showToast('重新探测启动失败', 'warning');
+    });
+  }, [showToast, openScanStream, probingSites]);
 
   // ---- 路由 ----
   const navHistoryRef = useRef<PageView[]>([]);
@@ -767,6 +878,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentEpisodes,
         startScan,
         probeSite,
+        reprobeSites,
         probingSites,
         patchScan,
         patchResource,

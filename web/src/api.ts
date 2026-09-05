@@ -1,5 +1,5 @@
 // 后端（manage FastAPI）接口封装。同源部署（/cine 与 /api 同一服务），开发时由 vite 代理。
-import type { MovieItem, UserProfile, ResourceMatch, WatchHistoryItem, CatalogSection, LiveListData, LivePlayData, LiveEpgData, LiveFavoriteItem, LiveHistoryItem, LiveProbeResult } from './types';
+import type { MovieItem, UserProfile, ResourceMatch, WatchHistoryItem, CatalogSection, LiveListData, LivePlayData, LiveEpgData, LiveFavoriteItem, LiveHistoryItem, LiveProbeResult, ScanCandidateResult } from './types';
 
 /** /api/resource/search/stream 的 SSE 事件。 */
 export interface SearchStreamEvent {
@@ -106,10 +106,11 @@ export const api = {
       `/api/player?key=${encodeURIComponent(key)}&flag=${encodeURIComponent(flag)}&id=${encodeURIComponent(id)}`
     ),
   deviceStatus: () => request<{ online: boolean; name: string; version: string }>('/api/device'),
-  resourceScan: (candidates: { key: string; id: string; name?: string }[], refDurationS?: number) =>
+  resourceScan: (candidates: { key: string; id: string; name?: string }[], refDurationS?: number, fresh = false, prior?: ScanCandidateResult[]) =>
     request<{ scanId: string; sites: number; error?: string }>('/api/resource/scan', {
       method: 'POST',
-      body: JSON.stringify({ candidates, refDurationS: refDurationS || undefined }),
+      body: JSON.stringify({ candidates, refDurationS: refDurationS || undefined, fresh: fresh || undefined,
+        prior: prior?.length ? prior.filter((p) => p.flag) : undefined }),
     }),
 
   // ---- 直播（经设备桥，直连优先） ----

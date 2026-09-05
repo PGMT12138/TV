@@ -4,9 +4,9 @@
 // 经 portal 挂到 body——页面容器的入场动画会产生层叠上下文，直接渲染会被导航栏盖住。
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Loader2, Radar, X, ListVideo } from 'lucide-react';
+import { ChevronDown, Loader2, Radar, RefreshCw, X, ListVideo } from 'lucide-react';
 import { ResourceMatch, ScanState } from '../types';
-import { fmtSpeed, fmtRes, AD_LABEL, AD_CLASS } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, AD_LABEL, AD_CLASS, isUnsupportedCodec } from '../utils/scanFormat';
 import { SITE_GROUP_DEFS, classifySites } from '../utils/siteGroups';
 
 interface Props {
@@ -20,6 +20,8 @@ interface Props {
   onSelect: (siteKey: string, flag?: string) => void;
   probingSites?: Set<string>;                    // 懒补测进行中的站点
   onProbeSite?: (siteKey: string) => void;       // 发起单站懒补测
+  onReprobeAll?: () => void;                     // 全量重探全部已探测站点
+  onReprobeSite?: (siteKey: string) => void;     // 全量重探单站
 }
 
 // 各分区的视觉身份：面板描边/底色 + 标题圆点 + 标题色（与 hint 文案呼应）
@@ -34,7 +36,7 @@ const GROUP_STYLE: Record<string, { panel: string; dot: string; label: string }>
 
 export const SourcePickerModal: React.FC<Props> = ({
   open, onClose, scan, matches, isFeature, selectedSiteKey, selectedFlag, onSelect,
-  probingSites, onProbeSite,
+  probingSites, onProbeSite, onReprobeAll, onReprobeSite,
 }) => {
   // 分组折叠：推荐默认展开，其余默认收起
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ recommended: true });
@@ -69,10 +71,25 @@ export const SourcePickerModal: React.FC<Props> = ({
         {/* 头部：标题 + 扫描进度 / 汇总（早停时说明原因） */}
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-zinc-800 bg-zinc-900/95 shrink-0">
           <div className="min-w-0">
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <ListVideo className="w-4 h-4 text-emerald-400" />
-              选择来源与线路
-            </h3>
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <ListVideo className="w-4 h-4 text-emerald-400" />
+                选择来源与线路
+              </h3>
+              {/* 重新探测全部已探测站点：逐线全量实测，不做达标即停 */}
+              {onReprobeAll && (scan?.results?.length || 0) > 0 && (
+                <button
+                  onClick={onReprobeAll}
+                  disabled={scan?.status === 'running' || (probingSites?.size || 0) > 0}
+                  title="重新实测全部已探测的站点线路（全量不早停）"
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  {(probingSites?.size || 0) > 0
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> 重探中…</>
+                    : <><RefreshCw className="w-3.5 h-3.5" /> 重新探测</>}
+                </button>
+              )}
+            </div>
             <p className="text-[11px] text-zinc-500 truncate mt-0.5">
               {scan?.status === 'running'
                 ? `智能测速中 ${scan.finished}/${scan.total || '…'} 条线路，结果实时更新`
@@ -132,10 +149,27 @@ export const SourcePickerModal: React.FC<Props> = ({
                             )}
                             {e.best?.metrics && (
                               <span className="ml-auto flex items-center gap-1.5 text-[9px] shrink-0">
+                                {isUnsupportedCodec(e.best.metrics.codec) && (
+                                  <span className="text-amber-400/90" title="视频编码当前浏览器播不了">播不了✕</span>
+                                )}
                                 <span className="text-emerald-400/90">{fmtSpeed(e.best.metrics.throughputMbps)}</span>
                                 <span className="text-zinc-400/90">{fmtRes(e.best.metrics.height)}</span>
                                 <span className={AD_CLASS[e.best.metrics.adLevel]}>{AD_LABEL[e.best.metrics.adLevel]}</span>
                               </span>
+                            )}
+                            {hasLines && onReprobeSite && (
+                              <button
+                                disabled={probing}
+                                onClick={() => onReprobeSite(e.match.siteKey)}
+                                title="全量重新探测该站点（不早停）"
+                                className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border text-[10px] transition-colors shrink-0 ${
+                                  e.best?.metrics ? '' : 'ml-auto'
+                                } bg-zinc-800/80 border-zinc-700 text-zinc-400 hover:text-emerald-300 hover:border-emerald-500/40 disabled:opacity-50 disabled:cursor-not-allowed`}
+                              >
+                                {probing
+                                  ? <><Loader2 className="w-3 h-3 animate-spin" /> 重探中</>
+                                  : <><RefreshCw className="w-3 h-3" /> 重探</>}
+                              </button>
                             )}
                             {!hasLines && onProbeSite && (
                               <span className="ml-auto flex items-center gap-1.5 shrink-0">
@@ -150,9 +184,10 @@ export const SourcePickerModal: React.FC<Props> = ({
                                 </button>
                                 <button
                                   onClick={() => onSelect(e.match.siteKey, undefined)}
+                                  title="跳过测速，直接用该站默认线路起播（无速度/清晰度参考）"
                                   className="px-2 py-1 rounded-lg bg-zinc-800/80 border border-zinc-700 text-zinc-300 text-[10px] hover:border-zinc-500 transition-colors"
                                 >
-                                  仍要尝试
+                                  直接播放
                                 </button>
                               </span>
                             )}
@@ -179,6 +214,9 @@ export const SourcePickerModal: React.FC<Props> = ({
                                     <span className="truncate max-w-[10rem]">{r.flag}</span>
                                     {ok ? (
                                       <span className="flex items-center gap-1 text-[9px] shrink-0 whitespace-nowrap">
+                                        {isUnsupportedCodec(r.metrics!.codec) && (
+                                          <span className="text-amber-400/90" title="视频编码当前浏览器播不了，选择后可能一直加载中">播不了✕</span>
+                                        )}
                                         <span className="text-emerald-400/90">{fmtSpeed(r.metrics!.throughputMbps)}</span>
                                         <span className="text-zinc-400/90">{fmtRes(r.metrics!.height)}</span>
                                         <span className={AD_CLASS[r.metrics!.adLevel]}>{AD_LABEL[r.metrics!.adLevel]}</span>

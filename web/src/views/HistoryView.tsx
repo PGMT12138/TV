@@ -15,21 +15,23 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-const ITEMS_PER_PAGE = 5;
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 export const HistoryView: React.FC = () => {
   const { watchHistory, deleteHistoryItem, clearAllHistory, navigateTo } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
 
-  // Reset to first page when search changes
+  // Reset to first page when search or page size changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery]);
+  }, [searchQuery, pageSize]);
 
   // Time calculations
   const totalMinutesWatched = useMemo(() => {
@@ -51,13 +53,13 @@ export const HistoryView: React.FC = () => {
     });
   }, [watchHistory, searchQuery]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredHistory.length / ITEMS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(filteredHistory.length / pageSize));
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
 
   const paginatedHistory = useMemo(() => {
-    const startIndex = (safeCurrentPage - 1) * ITEMS_PER_PAGE;
-    return filteredHistory.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [filteredHistory, safeCurrentPage]);
+    const startIndex = (safeCurrentPage - 1) * pageSize;
+    return filteredHistory.slice(startIndex, startIndex + pageSize);
+  }, [filteredHistory, safeCurrentPage, pageSize]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -335,8 +337,25 @@ export const HistoryView: React.FC = () => {
               className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 pb-2 border-t border-zinc-800/80"
             >
               {/* Left Total Info */}
-              <div className="text-xs text-zinc-400 font-mono">
-                共 <span className="text-emerald-400 font-bold">{filteredHistory.length}</span> 条记录 · 每页 {ITEMS_PER_PAGE} 条 · 第 <span className="text-white font-bold">{safeCurrentPage}</span> / {totalPages} 页
+              <div className="text-xs text-zinc-400 font-mono flex items-center gap-1.5">
+                <span>
+                  共 <span className="text-emerald-400 font-bold">{filteredHistory.length}</span> 条记录 · 每页
+                </span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="px-1.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 text-emerald-400 font-bold focus:outline-none focus:border-emerald-500/50 cursor-pointer hover:border-zinc-700 transition-colors [color-scheme:dark]"
+                  title="选择每页显示条数"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size} className="bg-zinc-900 text-zinc-100">
+                      {size}
+                    </option>
+                  ))}
+                </select>
+                <span>
+                  条 · 第 <span className="text-white font-bold">{safeCurrentPage}</span> / {totalPages} 页
+                </span>
               </div>
 
               {/* Right Page Controls */}

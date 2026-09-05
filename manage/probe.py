@@ -8,7 +8,7 @@
 - 时长：m3u8 分片 EXTINF 求和，与片库片长（ref_s）交叉比对，短/长异常参与评分。
 
 取流走与 /stream 相同的两条路径（httpx 直连回源 / 经设备 fetch 转发），探测出的速度即网页观看的真实速度。
-结果缓存 probe_cache（TTL 6h），每次探测滚动写入 site_stats，站点历史广告率作为排序先验。
+每次探测滚动写入 site_stats，站点历史广告率作为排序先验；探测结果不做缓存，每次扫描逐线实测。
 """
 import asyncio
 import collections
@@ -26,9 +26,6 @@ import httpx
 from database import get_conn
 from bridge import active_device, call_device, _ids
 
-PROBE_TTL = 6 * 3600          # 探测结果缓存时长：采集站源时效性强
-PROBE_VER = 3                 # 探测能力版本：变更时 bump，旧版本缓存视为过期自愈重探
-                              # v2 = m3u8 302 拼接修复 + MP4 大 moov 补读；v3 = moov 在文件尾的 Range 回读
 PLAYER_TIMEOUT = 25.0         # playerContent 最长等待（含 WebView 嗅探/网盘转存）
 FETCH_TIMEOUT = 15.0
 DETAIL_TIMEOUT = 20.0
@@ -37,13 +34,22 @@ PROBE_CONCURRENCY = 4
 RECONNECT_WAIT = 90.0         # 设备掉线后等待桥接重连的上限（App 侧重连退避最长 60s）
 FLAGS_PER_SITE = 8            # 每站点最多探测的线路数（同站线路多为同一上游，全探浪费且压垮设备爬虫）
 
-# ---------------- 智能扫描（按质量排序 + 达标即停） ----------------
-# 站点/线路排序让"可能好的"先探；探到足够多的好线路立即收工，余下留给选源弹窗的懒补测。
+# ---------------- 智能扫描（优先线路全量实测 + 普通线路达标即停） ----------------
+# 优先批次：名字带 4K/蓝光/超清等关键词的线路先全部实测（全局 ≤50 条），不受达标即停限制，
+# 探完再进入普通线路流程；关键词线路不足 30 条时（冷门片常见），从普通批次按排序规则
+# 提级补齐到 50 条保证探测覆盖面；超额时按"站点历史先验 + 关键词规格"全局择优取优质线路。
+# 普通线路按"可能好的"先探，探到足够多的好线路立即收工，余下留给选源弹窗的懒补测；
 # 冷门片找不到达标线路时自然退化为全量扫描，探测预算自动花在需要的地方。
-SCAN_SITES_CAP = 30           # 扫描站点上限（早停兜底下的安全边界，防极端配置规模失控）
+SCAN_SITES_CAP = 60           # 扫描站点上限：与前端 matches 上限 60 对齐——命中站点一个不丢，
+                              # 探测规模由"全局优先额度 50 + 每站 8 条 + 达标即停"约束（曾为 30，
+                              # 超出站点的优先线会被无感丢弃，玩具总动员5 实测漏了剧圈影视 BB蓝光1）
+PRIORITY_LINES_CAP = 50       # 优先线路（4K/蓝光/超清等）实测条数上限：全部探完才进入普通线路流程
+PRIORITY_FILL_MIN = 30        # 优先批次条数下限：不足时从普通批次按排序提级补齐到优先额度
 GOOD_LINES_TARGET = 3         # 达标线路数目标：探到这么多条"够好"的即提前结束
 GOOD_MIN_MBPS = 3.0           # 够好线路的首分片吞吐下限
 HIGH_MIN_HEIGHT = 1080        # 达标条件之一：至少一条线路清晰度 ≥ 此值
+TRAILER_MAX_S = 120           # 时长绝对下限：片库无片长可比对时，正片（电影/单集）不可能
+                              # 只有 2 分钟以内——这几乎必是预告片/花絮（玩具总动员5 4K 宣传片实例）
 # 线路名只是营销话术（"4K"线实测可能 1616p），但只用于探测排序不影响结果，零风险
 FLAG_GOOD_HINTS = ("4k", "蓝光", "超清", "hdr", "1080", "2160", "杜比", "原盘")
 FLAG_LATE_HINTS = ("爱奇艺", "优酷", "腾讯", "mgtv", "bilibili", "哔哩", "vip",
@@ -108,13 +114,18 @@ async def _call_device_wait(action: str, params: dict, timeout: float) -> dict:
                 raise
 
 
-async def start_scan(matches: list[dict], ref_s: float | None = None) -> str:
-    """matches: [{key, id, name}]，已按匹配分排序、按站点去重；ref_s 为片库片长（秒），供时长交叉比对。"""
+async def start_scan(matches: list[dict], ref_s: float | None = None, fresh: bool = False,
+                     prior: list[dict] | None = None) -> str:
+    """matches: [{key, id, name}]，已按匹配分排序、按站点去重；ref_s 为片库片长（秒），供时长交叉比对。
+    fresh=True 为手动重探：不做"达标即停"早停（用户要求全量重测）。
+    prior 为本片此前各轮扫描已实测的线路结果（前端合并扫描状态，含 metrics）：
+    ① 优先批次的 PRIORITY_LINES_CAP 上限跨扫描累计封顶；② 早停条件与最终推荐键按
+    "历史 + 本轮"全局口径评估——否则补充扫描自身凑不齐达标条件时，普通批次会对已达标的片继续空转。"""
     scan_id = secrets.token_hex(8)
     task = ScanTask()
     _scans[scan_id] = task
     _cleanup_scans()
-    asyncio.get_event_loop().create_task(_run_scan(task, matches, ref_s))
+    asyncio.get_event_loop().create_task(_run_scan(task, matches, ref_s, fresh, prior))
     return scan_id
 
 
@@ -332,11 +343,22 @@ def _ffprobe_sync(data: bytes) -> dict | None:
             f.write(data)
         out = subprocess.run(
             [FFPROBE, "-v", "quiet", "-print_format", "json",
-             "-show_entries", "stream=codec_type,codec_name,width,height", path],
+             "-show_entries", "stream=codec_type,codec_name,width,height:format=duration", path],
             capture_output=True, timeout=10).stdout
-        for st in (json.loads(out or b"{}").get("streams") or []):
-            if st.get("codec_type") == "video":
-                return {"width": st.get("width"), "height": st.get("height"), "codec": st.get("codec_name")}
+        parsed = json.loads(out or b"{}")
+        info: dict = {}
+        for st in (parsed.get("streams") or []):
+            if st.get("codec_type") == "video" and "codec" not in info:
+                info.update(width=st.get("width"), height=st.get("height"), codec=st.get("codec_name"))
+            elif st.get("codec_type") == "audio" and "acodec" not in info:
+                # 音频编码浏览器 MSE 支持参差（EAC3/AC3 常缺），前端播不了判定要用
+                info["acodec"] = st.get("codec_name")
+        # 容器总时长（HLS 分片文件是单分片时长、不消费；MP4 直链靠它做正片/预告片比对）
+        try:
+            info["duration"] = round(float((parsed.get("format") or {}).get("duration") or 0), 1) or None
+        except (TypeError, ValueError):
+            info["duration"] = None
+        return info or None
     except Exception:
         return None
     finally:
@@ -412,38 +434,7 @@ def _watermark_signal(fa: bytes | None, fb: bytes | None) -> str | None:
     return None
 
 
-# ---------------- 缓存与站点统计 ----------------
-
-def _cache_get(site_key: str, flag: str, episode_id: str) -> dict | None:
-    try:
-        conn = get_conn()
-        row = conn.execute("SELECT metrics, created_at FROM probe_cache WHERE site_key=? AND flag=? AND episode_id=?",
-                           (site_key, flag, episode_id)).fetchone()
-        conn.close()
-        if row and time.time() - row["created_at"] < PROBE_TTL:
-            metrics = json.loads(row["metrics"])
-            # 版本不符视为过期重探自愈；v2 起已有清晰度的条目继续有效（v3 只补尾部 moov 能力）
-            if metrics.get("v") != PROBE_VER and not (metrics.get("v", 0) >= 2 and metrics.get("height")):
-                return None
-            metrics["cached"] = True
-            return metrics
-    except Exception:
-        pass
-    return None
-
-
-def _cache_set(site_key: str, flag: str, episode_id: str, metrics: dict):
-    try:
-        conn = get_conn()
-        metrics = {**metrics, "v": PROBE_VER}
-        conn.execute("INSERT OR REPLACE INTO probe_cache (site_key, flag, episode_id, metrics, created_at) "
-                     "VALUES (?, ?, ?, ?, ?)",
-                     (site_key, flag, episode_id, json.dumps(metrics, ensure_ascii=False), time.time()))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
+# ---------------- 站点统计 ----------------
 
 def _stats_insert(site_key: str, ok: bool, ad_level: str, speed: float | None, height: int | None):
     try:
@@ -505,6 +496,18 @@ def _flag_rank(flag: str) -> int:
     return 1
 
 
+# 同为优质关键词（rank 0），名字承诺的规格也有高低：原盘/杜比 > 2160/4K > HDR > 蓝光 >
+# 超清 > 1080。只作优先额度内线路排序的次级信号，站点历史先验为主（0.5 先验站的原盘
+# 线不会越过 0.8 先验站的 1080 线）——线路名是营销话术，站点实测历史可信得多
+FLAG_QUALITY_BONUS = (("原盘", 0.06), ("杜比", 0.06), ("2160", 0.05), ("4k", 0.05),
+                      ("hdr", 0.03), ("蓝光", 0.02), ("超清", 0.01))
+
+
+def _flag_quality_bonus(flag: str) -> float:
+    f = (flag or "").lower()
+    return next((b for tok, b in FLAG_QUALITY_BONUS if tok in f), 0.0)
+
+
 def _line_good(r: dict) -> bool:
     """达标线路：可用、无确认广告、时长比对正常、吞吐达标。"""
     if r.get("status") != "ok" or not r.get("metrics"):
@@ -528,13 +531,6 @@ def _fail(cand: dict, error: str) -> dict:
 
 async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
     site_key, flag, episode_id = cand["siteKey"], cand["flag"], cand["episodeId"]
-    cached = _cache_get(site_key, flag, episode_id)
-    if cached:
-        # 旧缓存没算过时长比对时按本次入参补算（只改内存副本，不回写缓存）
-        if ref_s and not cached.get("durationMatch"):
-            _apply_duration_ref(cached, ref_s)
-        return {**cand, "status": "ok", "metrics": cached}
-
     t0 = time.monotonic()
     try:
         data = await _call_device_wait("player", {"key": site_key, "flag": flag, "id": episode_id},
@@ -585,31 +581,33 @@ def _score(first_frame_s: float, mbps: float, height: int | None) -> dict:
 
 
 def _apply_duration_ref(metrics: dict, ref_s: float | None) -> None:
-    """正片时长与片库片长交叉比对：远短疑似预告/假资源重罚，明显偏长疑似拼接广告轻罚。"""
+    """正片时长与片库片长交叉比对：远短疑似预告/假资源重罚，明显偏长疑似拼接广告轻罚。
+    片库无片长（ref_s 空）时退化为绝对下限：正片不可能只有 TRAILER_MAX_S 秒以内，
+    仍能识别预告片/花絮线路（玩具总动员5 的 4K 宣传片漏判即此处此前直接 return）。"""
     dur = metrics.get("durationS") or 0
-    if not ref_s or not dur:
+    if not dur:
         return
-    delta = dur - ref_s
-    metrics["durationDeltaS"] = round(delta)
     total = metrics["scores"]["total"]
-    if dur < ref_s * 0.6:
+    if dur < TRAILER_MAX_S or (ref_s and dur < ref_s * 0.6):
         metrics["durationMatch"] = "short"
         metrics["scores"]["total"] = round(max(0.0, total * 0.4), 3)
-    elif delta > max(600, ref_s * 0.15):
-        metrics["durationMatch"] = "long"
-        metrics["scores"]["total"] = round(max(0.0, total - 0.12), 3)
-    else:
-        metrics["durationMatch"] = "ok"
+    elif ref_s:
+        delta = dur - ref_s
+        metrics["durationDeltaS"] = round(delta)
+        if delta > max(600, ref_s * 0.15):
+            metrics["durationMatch"] = "long"
+            metrics["scores"]["total"] = round(max(0.0, total - 0.12), 3)
+        else:
+            metrics["durationMatch"] = "ok"
 
 
 def _finish(cand: dict, metrics: dict, ref_s: float | None = None) -> dict:
-    """统一算分并落缓存/统计。"""
+    """统一算分并落统计。"""
     metrics["scores"] = _score(metrics["firstFrameS"], metrics["throughputMbps"], metrics.get("height"))
     total = 0.5 * metrics["scores"]["speed"] + 0.5 * metrics["scores"]["quality"]
     total -= {"clean": 0.0, "suspect": 0.1, "dirty": 0.4}[metrics["adLevel"]]
     metrics["scores"]["total"] = round(max(0.0, total), 3)
     _apply_duration_ref(metrics, ref_s)
-    _cache_set(cand["siteKey"], cand["flag"], cand["episodeId"], metrics)
     _stats_insert(cand["siteKey"], True, metrics["adLevel"], metrics["throughputMbps"], metrics.get("height"))
     return {**cand, "status": "ok", "metrics": metrics}
 
@@ -676,7 +674,7 @@ async def _probe_hls(cand: dict, url: str, headers: dict, local: bool, pl: dict,
     return _finish(cand, {
         "openMs": open_ms, "ttfbS": ttfb, "firstFrameS": round(open_ms / 1000 + ttfb + seg_time, 2),
         "throughputMbps": mbps, "width": width, "height": height,
-        "codec": info.get("codec"), "bitrateKbps": bitrate,
+        "codec": info.get("codec"), "acodec": info.get("acodec"), "bitrateKbps": bitrate,
         "durationS": duration_s, "adLevel": ad_level, "adSignals": signals, "kind": "hls",
     }, ref_s)
 
@@ -698,6 +696,33 @@ def _mp4_moov_end(data: bytes) -> int | None:
             return None
         off += size
     return None
+
+
+def _mp4_moov_at_end(data: bytes) -> bool:
+    """头部若干 MB 里先见 mdat 后未见 moov → moov 在文件尾（非 faststart）。
+    这类大 MP4 浏览器必须先拿到尾部索引才能起播：桌面 Chromium 会发 suffix Range 直跳文件尾
+    （秒起），不少手机内置浏览器只会顺序下载（GB 级文件 15s 内到不了 moov，表现为一直加载）。
+    注意 64bit size 盒（size==1）：mdat 常用，需按 8 字节头跳过。"""
+    off = 0
+    while off + 8 <= len(data):
+        size = int.from_bytes(data[off:off + 4], "big")
+        typ = data[off + 4:off + 8]
+        if size == 1:
+            if off + 16 > len(data):
+                return False
+            size = int.from_bytes(data[off + 8:off + 16], "big")
+            if size < 16:
+                return False
+        elif size == 0:
+            return False  # size=0 表示直到文件尾，探测只下头部不该出现，放弃判定
+        if size < 8:
+            return False
+        if typ == b"moov":
+            return False
+        if typ == b"mdat":
+            return True
+        off += size
+    return False
 
 
 async def _fetch_tail(url: str, headers: dict, cap: int) -> tuple[int, bytes] | None:
@@ -774,16 +799,49 @@ async def _probe_file(cand: dict, url: str, headers: dict, local: bool, pl: dict
         "openMs": open_ms, "ttfbS": round(pl["ttfb"], 3),
         "firstFrameS": round(open_ms / 1000 + pl["elapsed"], 2),
         "throughputMbps": mbps, "width": info.get("width"), "height": info.get("height"),
-        "codec": info.get("codec"), "bitrateKbps": None,
+        "codec": info.get("codec"), "acodec": info.get("acodec"), "bitrateKbps": None,
+        "durationS": info.get("duration"),  # MP4 直链此前不产出时长，预告片漏过交叉比对
+        "moovEnd": _mp4_moov_at_end(pl["data"]),
         "adLevel": "clean", "adSignals": [], "kind": "file",
     }, ref_s)
 
 
 # ---------------- 扫描编排 ----------------
 
-async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = None):
+async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = None,
+                    fresh: bool = False, prior: list[dict] | None = None):
     results: list[dict] = []
     try:
+        # 跨扫描先验（详情阶段前就要用）：优先额度与全局达标状态。
+        # 详情获取失败的空 flag 条目不参与——它们没实测过线路。
+        # 优先额度按上一轮 prio 标记（优先批次实测线路）统计：补齐逻辑会把普通线路提级进
+        # 优先批次，它们同样消耗额度但线路名不是关键词——按 rank==0 数会漏掉（曾致
+        # 玩具总动员5 首轮 50 条 + 补充扫描又拉满 29 条 = 79 条超额）；旧结果无 prio
+        # 字段时回退按关键词线路名估算（过渡兼容，刷新重扫后即消失）
+        prior = [p for p in (prior or []) if p.get("flag")]
+
+        def _was_priority(p: dict) -> bool:
+            return p["prio"] if "prio" in p else _flag_rank(p.get("flag") or "") == 0
+
+        already_priority = sum(1 for p in prior if _was_priority(p))
+        priority_cap = max(0, PRIORITY_LINES_CAP - already_priority)
+        criteria_met = (sum(1 for p in prior if _line_good(p)) >= GOOD_LINES_TARGET
+                        and any(_line_high(p) for p in prior))
+        # 自动补充扫描无事可做：优先额度耗尽且全局已达标——跳过详情与探测直接按先验收工，
+        # 白跑一轮详情请求只会压设备爬虫（手动补测/重探不带 prior，不会走到这里）
+        if not fresh and criteria_met and priority_cap == 0:
+            ok = [p for p in prior if p.get("status") == "ok" and p.get("flag")]
+
+            def pkey(r: dict) -> str:
+                return f"{r['siteKey']}::{r['flag']}"
+
+            def padj(r: dict) -> float:
+                return r["metrics"]["scores"]["total"] - 0.06 * _site_ad_rate(r["siteKey"])
+
+            _emit(task, {"type": "meta", "total": 0})
+            _emit(task, {"type": "done", "total": len(prior), "stoppedEarly": True,
+                         "recommended": pkey(sorted(ok, key=lambda r: (AD_RANK[r["metrics"]["adLevel"]], -padj(r)))[0]) if ok else None})
+            return
         sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
 
         async def one_detail(m: dict):
@@ -796,15 +854,19 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
 
         pairs = await asyncio.gather(*[one_detail(m) for m in matches])
 
-        # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序），
-        # 站内线路按名字启发式排序后再截 FLAGS_PER_SITE——好线路先探，早停才有意义
+        # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序）。
+        # 线路按名字启发式分流：4K/蓝光/超清等进优先批次（全局 ≤PRIORITY_LINES_CAP 条全量实测，
+        # 不足 PRIORITY_FILL_MIN 条时从普通批次按排序补齐，超额时按"站点先验 + 关键词规格"
+        # 全局择优），其余进普通批次（每站 ≤FLAGS_PER_SITE 条，达标即停）
+        priors = {m["key"]: _site_prior(m["key"]) for m in matches}
+
         def site_order(idx_m: tuple[int, dict]) -> float:
             idx, m = idx_m
-            prior = _site_prior(m["key"])
-            return -((0.5 if prior is None else prior) - 0.002 * idx)
+            return -((0.5 if priors[m["key"]] is None else priors[m["key"]]) - 0.002 * idx)
 
         ordered = sorted(enumerate(matches), key=site_order)
-        candidates: list[dict] = []
+        prio_pool: list[dict] = []  # 全部关键词线路候选：全局排序后再截优先额度（超额择优）
+        site_normals: dict[str, list[dict]] = {}  # 各站普通线路切片（站内已按线路名启发式排序）
         pair_by_key = {m["key"]: d for m, d in pairs}
         for _, m in ordered:
             data = pair_by_key.get(m["key"])
@@ -813,27 +875,61 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                                 "vodId": m["id"], "flag": "", "status": "fail", "error": "详情获取失败"})
                 continue
             flags = sorted(data.get("flags") or [], key=lambda f: _flag_rank(f.get("flag") or ""))
-            for f in flags[:FLAGS_PER_SITE]:
+            queued = 0  # 本站已入队普通批候选数（关键词线路不计入：其负载由全局优先额度约束）
+            for f in flags:
                 eps = f.get("episodes") or []
                 if not eps or not eps[0].get("url"):
                     continue
-                candidates.append({"siteKey": m["key"], "siteName": m.get("name") or m["key"],
-                                   "vodId": m["id"], "flag": f.get("flag", ""),
-                                   "episodeId": eps[0]["url"]})
-        _emit(task, {"type": "meta", "total": len(candidates) + len(results)})
+                cand = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
+                        "vodId": m["id"], "flag": f.get("flag", ""),
+                        "episodeId": eps[0]["url"]}
+                if _flag_rank(f.get("flag") or "") == 0:
+                    prio_pool.append(cand)
+                    continue
+                if queued >= FLAGS_PER_SITE:
+                    continue
+                site_normals.setdefault(m["key"], []).append(cand)
+                queued += 1
+        # 关键词线路全局择优：超额（全网 4K/蓝光线 > 50 条）时不能"站点处理顺序先到先得"——
+        # 按 站点历史先验（成功率/清晰度/速度/广告率）+ 关键词规格细分 降序取前 priority_cap 条；
+        # 稳定排序保持站点先验序与站内线路原序
+        prio_pool.sort(key=lambda c: -((0.5 if priors[c["siteKey"]] is None else priors[c["siteKey"]])
+                                       + _flag_quality_bonus(c["flag"])))
+        priority = prio_pool[:priority_cap]  # 优先线路：全部实测，不受达标即停限制
+        # 额度外关键词线路回落普通批次：放回各自站点普通切片头部（关键词线路排本站普通线
+        # 之前，与旧口径一致），且与本站普通线合并后仍受每站 ≤FLAGS_PER_SITE 条约束
+        overflow: dict[str, list[dict]] = {}
+        for cand in prio_pool[priority_cap:]:
+            overflow.setdefault(cand["siteKey"], []).append(cand)
+        normal: list[dict] = []
+        for _, m in ordered:
+            normal.extend((overflow.get(m["key"], []) + site_normals.get(m["key"], []))[:FLAGS_PER_SITE])
+        # 优先批次不足 30 条（冷门片 4K/蓝光关键词线路少）：从普通批次头部（即排序规则下
+        # 最优的普通线路：站点质量先验 → 线路名启发式）提级补齐到本轮优先额度 ≤50 条，
+        # 提级线路同样全量实测不受达标即停限制——否则优先线只有十几条、普通线又早早
+        # 达标即停，本轮探测覆盖面太小
+        if len(priority) < PRIORITY_FILL_MIN:
+            take = min(priority_cap - len(priority), len(normal))
+            priority.extend(normal[:take])
+            del normal[:take]
+        _emit(task, {"type": "meta", "total": len(priority) + len(normal) + len(results)})
         for r in results:
             _emit(task, {"type": "result", "result": r})
+        # 此前各轮结果并入全局评估基数（不重发事件，前端已持有）：早停条件与最终
+        # 推荐键均按"历史 + 本轮"合并口径判定
+        results.extend(prior)
 
         sem_probe = asyncio.Semaphore(PROBE_CONCURRENCY)
         aborted = False
         early_stop = False
 
-        async def one_probe(cand: dict):
+        async def one_probe(cand: dict, prio: bool = False):
             nonlocal aborted, early_stop
             async with sem_probe:
-                if aborted or early_stop:
+                if aborted or (early_stop and not prio):
                     return
                 res = await probe_candidate(cand, ref_s)
+            res["prio"] = prio  # 优先批次标记：跨扫描优先额度封顶按此统计（提级线也占额度）
             results.append(res)
             _emit(task, {"type": "result", "result": res})
             # 设备掉线：等一轮桥接重连退避，仍不在线则中止扫描，避免刷几十条重复失败
@@ -844,12 +940,24 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                     aborted = True
                     _emit(task, {"type": "done", "error": "设备连接中断，部分线路未完成探测"})
                     return
-            # 达标即停：够好线路数达标且至少一条高清，剩余候选不再探测（在飞的探完自然并入）
-            if not early_stop and sum(1 for r in results if _line_good(r)) >= GOOD_LINES_TARGET \
+            # 达标即停：够好线路数达标且至少一条高清，剩余候选不再探测（在飞的探完自然并入）；
+            # 达标状态照常累计——优先线路不因达标跳过（全量实测），但优先批次结束后若已达标，
+            # 普通线路批次会整体跳过。手动重探（fresh）不做早停——用户明确要求全量重测
+            if not fresh and not early_stop and sum(1 for r in results if _line_good(r)) >= GOOD_LINES_TARGET \
                     and any(_line_high(r) for r in results):
                 early_stop = True
 
-        await asyncio.gather(*[one_probe(c) for c in candidates])
+        # 优先批次：4K/蓝光/超清等线路全部探完（≤本轮优先额度）
+        await asyncio.gather(*[one_probe(c, prio=True) for c in priority])
+        if aborted:
+            return
+        # 优先批次结束：按全局口径（含此前各轮结果）显式评估一次达标即停——
+        # 满足则普通批次整体跳过，不再发一条探测
+        if not fresh and not early_stop and sum(1 for r in results if _line_good(r)) >= GOOD_LINES_TARGET \
+                and any(_line_high(r) for r in results):
+            early_stop = True
+        # 普通批次：其余线路按原排序与达标即停流程探测
+        await asyncio.gather(*[one_probe(c) for c in normal])
         if aborted:
             return
 

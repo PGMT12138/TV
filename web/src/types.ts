@@ -218,6 +218,7 @@ export interface ResourceState {
   restoredPick?: boolean;        // 已从历史恢复用户上次的站点/线路，扫描不再自动切源
   awaitScan?: boolean;           // 首次加载且无历史偏好：等扫描出现可用线路再起播
   provisional?: boolean;         // 起播用的是扫描中的临时较优线路，全部完成后自动切最优
+  searchEnded?: boolean;         // 聚合搜索 SSE 已结束（matches 已齐；冷搜渐进合并时扫描可能只覆盖了部分站点）
 }
 
 // ---------------- 智能选源（线路测速/清晰度/广告探测） ----------------
@@ -232,13 +233,14 @@ export interface ScanMetrics {
   width?: number;
   height?: number;
   codec?: string;
+  acodec?: string;           // 音频编码（eac3/ac3 的 MSE 支持参差，参与"播不了"判定）
+  moovEnd?: boolean;         // MP4 索引在文件尾：手机浏览器顺序下载起播极慢，参与降权
   bitrateKbps?: number;
   durationS?: number;         // 正片总时长（m3u8 分片时长求和；mp4/未知为空）
   durationMatch?: 'short' | 'ok' | 'long';  // 与片库片长比对：short 疑似预告/假资源，long 疑似拼接广告
   durationDeltaS?: number;    // 与片库片长的差值（秒）
   adLevel: AdLevel;
   adSignals: string[];
-  cached?: boolean;
   kind?: 'hls' | 'file';
   scores: { speed: number; quality: number; total: number };
 }
@@ -251,6 +253,7 @@ export interface ScanCandidateResult {
   status: 'ok' | 'fail';
   error?: string;
   metrics?: ScanMetrics;
+  prio?: boolean;             // 优先批次实测标记：补充扫描回传 prior 时后端按此扣减优先额度
 }
 
 export interface ScanState {
@@ -260,6 +263,7 @@ export interface ScanState {
   finished: number;
   results: ScanCandidateResult[];
   stoppedEarly?: boolean;     // 达标即停：已锁定足够高质量线路，剩余站点未探测（选源弹窗可懒补测）
+  extending?: boolean;        // 补充扫描进行中（聚合搜索结束后对其余站点再探一轮），提示文案区分用
   userPicked?: boolean;       // 用户手动换源后本影片不再自动切
   switched?: boolean;         // 已执行过自动切换
   recommendedKey?: string;    // `${siteKey}::${flag}`

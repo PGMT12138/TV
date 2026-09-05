@@ -6,10 +6,12 @@ import mpegts from 'mpegts.js';
 import {
   Tv, Star, RefreshCw, Volume2, VolumeX, Maximize, Play, Pause,
   ChevronDown, Signal, Radio, ListVideo, Activity, History, Trash2,
+  Smartphone, Lock, LockOpen,
 } from 'lucide-react';
 import { api, imgUrl } from '../api';
 import { useApp } from '../context/AppContext';
 import { MetricBadges } from '../components/MetricBadges';
+import { isMobileDevice, lockOrientation, unlockOrientation, type OrientationLock } from '../utils/orientation';
 import type { LiveListData, LiveChannel, LivePlayData, LiveEpgData, LiveFavoriteItem, LiveHistoryItem, LiveProbeResult } from '../types';
 
 type MpegtsPlayer = ReturnType<typeof mpegts.createPlayer>;
@@ -685,12 +687,53 @@ export const LiveView: React.FC = () => {
     v.muted = !v.muted;
     setMuted(v.muted);
   };
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [orientation, setOrientation] = useState<OrientationLock>('landscape');
+  // 移动端防误触锁定：拦截播放器全部交互，仅解锁按钮可点
+  const [controlsLocked, setControlsLocked] = useState(false);
+  // 锁定按钮随交互显隐：点播放器唤醒、几秒自动淡出（直播页无控制栏 state，独立计时）
+  const [lockBtnVisible, setLockBtnVisible] = useState(false);
+  const lockBtnTimerRef = useRef<number | null>(null);
+  const wakeLockBtn = useCallback(() => {
+    setLockBtnVisible(true);
+    if (lockBtnTimerRef.current) window.clearTimeout(lockBtnTimerRef.current);
+    lockBtnTimerRef.current = window.setTimeout(() => setLockBtnVisible(false), 3500);
+  }, []);
+  useEffect(() => () => {
+    if (lockBtnTimerRef.current) window.clearTimeout(lockBtnTimerRef.current);
+  }, []);
   const toggleFullscreen = () => {
     const el = videoRef.current?.parentElement;
     if (!el) return;
-    if (document.fullscreenElement) document.exitFullscreen();
-    else el.requestFullscreen?.().catch(() => {});
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+      unlockOrientation();
+    } else {
+      el.requestFullscreen?.().then(() => {
+        setIsFullscreen(true);
+        // 手机上全屏默认横屏（lock 仅移动端全屏生效，桌面/不支持的环境静默跳过）
+        if (isMobileDevice()) {
+          setOrientation('landscape');
+          lockOrientation('landscape');
+        }
+      }).catch(() => {});
+    }
   };
+  // 全屏内切换横竖屏（仅移动端显示）
+  const rotateOrientation = () => {
+    const next: OrientationLock = orientation === 'landscape' ? 'portrait' : 'landscape';
+    setOrientation(next);
+    lockOrientation(next);
+  };
+  useEffect(() => {
+    const h = () => {
+      const fs = !!document.fullscreenElement;
+      setIsFullscreen(fs);
+      if (!fs) unlockOrientation();
+    };
+    document.addEventListener('fullscreenchange', h);
+    return () => document.removeEventListener('fullscreenchange', h);
+  }, []);
   const replay = () => {
     const ref = currentRef.current;
     const channel = currentChannelRef.current;
@@ -991,8 +1034,27 @@ export const LiveView: React.FC = () => {
               playsInline
               autoPlay
               muted={muted}
-              onClick={togglePlay}
+              onClick={() => { togglePlay(); wakeLockBtn(); }}
             />
+            {/* 移动端防误触锁定：右侧垂直居中，点播放器唤醒、几秒自动淡出；
+                锁定后覆盖层拦截一切交互，仅此按钮可点（隐藏时点屏幕唤醒） */}
+            {isMobileDevice() && current && (
+              <button
+                onClick={() => setControlsLocked((v) => !v)}
+                title={controlsLocked ? '解锁播放器操作' : '锁定播放器操作'}
+                className={`absolute right-3 top-1/2 -translate-y-1/2 z-50 w-9 h-9 rounded-full flex items-center justify-center text-white/90 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] transition-opacity duration-300 ${
+                  lockBtnVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                }`}
+              >
+                {controlsLocked ? <LockOpen className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              </button>
+            )}
+            {controlsLocked && (
+              <div
+                className="absolute inset-0 z-40"
+                onClick={wakeLockBtn}
+              />
+            )}
             {!current && !videoLoading && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
                 <Tv className="w-12 h-12 text-zinc-600" />
@@ -1026,13 +1088,18 @@ export const LiveView: React.FC = () => {
                     <VolumeX className="w-3.5 h-3.5" /> 点击开声
                   </button>
                 )}
-                <div className="absolute bottom-0 inset-x-0 flex items-center gap-3 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                <div className={`absolute bottom-0 inset-x-0 flex items-center gap-3 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent transition-opacity ${controlsLocked ? 'opacity-0 pointer-events-none' : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100'}`}>
                   <button onClick={togglePlay} className="text-white/90 hover:text-white">{isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}</button>
                   <button onClick={toggleMute} className="text-white/90 hover:text-white">{muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}</button>
                   <div className="flex-1" />
                   {playData?.direct && !viaProxy && <span className="text-[10px] text-emerald-300/80">直连</span>}
                   {viaProxy && <span className="text-[10px] text-sky-300/80">服务器中转</span>}
                   <button onClick={replay} className="text-white/90 hover:text-white" title="重新拉流"><RefreshCw className="w-4 h-4" /></button>
+                  {isMobileDevice() && isFullscreen && (
+                    <button onClick={rotateOrientation} className="text-white/90 hover:text-white" title={orientation === 'landscape' ? '切换为竖屏' : '切换为横屏'}>
+                      <Smartphone className={`w-4 h-4 transition-transform ${orientation === 'landscape' ? 'rotate-90' : ''}`} />
+                    </button>
+                  )}
                   <button onClick={toggleFullscreen} className="text-white/90 hover:text-white"><Maximize className="w-5 h-5" /></button>
                 </div>
               </>

@@ -37,7 +37,7 @@ PBKDF2_ITERS = 120_000
 SITES_TTL = 600  # 站点列表缓存 10 分钟
 SEARCH_TIMEOUT = 20.0
 SEARCH_CONCURRENCY = 6
-SEARCH_CACHE_TTL = 6 * 3600  # 聚合搜索命中缓存 6 小时，过期后前台重新实时搜索
+SEARCH_CACHE_TTL = 2 * 3600  # 聚合搜索命中缓存 2 小时，过期后前台重新实时搜索
 SEARCH_RECHECK = 3600        # 缓存命中超过 1 小时未校验时，先回缓存、后台重搜比对（SWR）
 
 _sites_cache = {"t": 0.0, "device": "", "sites": []}
@@ -629,6 +629,8 @@ class ScanSite(BaseModel):
 class ScanBody(BaseModel):
     candidates: list[ScanSite]
     refDurationS: float | None = None  # 片库片长（秒），供探测时做时长交叉比对
+    fresh: bool = False                # 手动重探：逐线实测且不做早停（全量重测）
+    prior: list[dict] = []             # 本片此前各轮已实测的线路结果（含 metrics）：优先额度跨扫描封顶 + 早停/推荐键全局评估
 
 
 @router.post("/api/resource/scan")
@@ -643,10 +645,10 @@ async def resource_scan(body: ScanBody):
             continue
         seen.add(c.key)
         matches.append({"key": c.key, "id": c.id, "name": c.name})
-    del matches[SCAN_SITES_CAP:]  # 候选站点上限（早停机制下放宽到 30，防极端配置探测规模失控）
+    del matches[SCAN_SITES_CAP:]  # 候选站点上限（60，与前端 matches 上限对齐；探测规模由优先额度/每站上限/早停约束）
     if not matches:
         return {"error": "没有可探测的候选源"}
-    scan_id = await start_scan(matches, body.refDurationS)
+    scan_id = await start_scan(matches, body.refDurationS, body.fresh, body.prior)
     return {"scanId": scan_id, "sites": len(matches)}
 
 

@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../api';
 import { Episode, ScanCandidateResult, ScanMetrics, scanResultKey } from '../types';
-import { fmtSpeed, fmtRes, AD_LABEL, compareRecommended } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, AD_LABEL, compareRecommended, isMobileDevice } from '../utils/scanFormat';
+import { lockOrientation, unlockOrientation, type OrientationLock } from '../utils/orientation';
 import { SourcePickerModal } from '../components/SourcePickerModal';
 import { MetricBadges } from '../components/MetricBadges';
 import Hls from 'hls.js';
@@ -16,6 +17,9 @@ import {
   Minimize2,
   RotateCcw,
   RotateCw,
+  Smartphone,
+  Lock,
+  LockOpen,
   Bookmark,
   Share2,
   ChevronLeft,
@@ -46,6 +50,7 @@ export const WatchView: React.FC = () => {
     selectFlag,
     startScan,
     probeSite,
+    reprobeSites,
     probingSites,
     patchScan,
     patchResource,
@@ -76,6 +81,13 @@ export const WatchView: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  // 起播看门狗：HEVC-TS 等播放器解不了的流，分片正常下载但 MSE 进不了帧，
+  // readyState 永远停在 0 且不触发 hls.js fatal error
+  const playbackWatchdogRef = useRef<number | null>(null);
+  // 选集令牌过期自动换新：部分采集站 playUrl 带时效 token，页面停留超时后播放/
+  // 探测都会失败（App 端每次进详情都拿新 token 所以无感）。失败后重拉一次详情
+  // 换新令牌自动重试；按站点+线路 30s 防抖，避免线路真挂了时无限刷新
+  const tokenRefreshRef = useRef<{ key: string; t: number } | null>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const infoRef = useRef<HTMLElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
@@ -94,6 +106,8 @@ export const WatchView: React.FC = () => {
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // 移动端防误触锁定：锁定后拦截播放器全部交互（暂停/进度/音量/控制栏），仅解锁按钮可点
+  const [controlsLocked, setControlsLocked] = useState(false);
 
   const favorited = movie ? isFavorite(movie.id) : false;
 
@@ -197,7 +211,11 @@ export const WatchView: React.FC = () => {
 
   // 拉取播放地址并挂载到 <video>（m3u8 用 hls.js）
   useEffect(() => {
-    if (resource?.status !== 'ready' || !currentEpisode || !selectedMatch || !activeLine) return;
+    if (resource?.status !== 'ready' || !currentEpisode || !selectedMatch || !activeLine) {
+      // 站点就绪但没有任何可用选集（站点失效）：清掉起播 loading，别永远"正在解析"
+      if (resource?.status === 'ready' && !currentEpisode) setPlayerLoading(false);
+      return;
+    }
     // 首次加载且无历史偏好：等扫描出现第一条可用线路（由选优效果切过去）再起播
     if (!scanGateOpen) return;
     const video = videoRef.current;
@@ -216,9 +234,32 @@ export const WatchView: React.FC = () => {
         if (res.error) throw new Error(res.error);
         const src = res.play || res.url;
         if (!src) throw new Error('未获取到播放地址');
-        const isHls = res.hls || /\.m3u8(\?|$)/i.test(res.url || '') || /\.m3u8(\?|$)/i.test(src);
+        // 判定反转：只排除明确的文件直链（mp4/mkv 等），其余一律走 hls.js——大量线路入口是
+        // php/无后缀地址（如 m3u8.meilinvps.com/m3u8/32641）302 到 CDN m3u8，后端按后缀
+        // 误判 hls=false 后经 video.src 原生挂载，Chromium 不支持原生 HLS 会永远卡加载。
+        // 扩展名藏在 query 里的直链（网盘/对象存储签名 url 的 filename*=...mp4）也算文件：
+        // 喂给 hls.js 会把整个文件当清单下载，永远进不了帧
+        const FILE_EXT_RE = /\.(mp4|mkv|flv|avi|mov|webm|m4s)(?=[?&#]|$)/i;
+        const fileish = (u?: string) => {
+          if (!u) return false;
+          if (FILE_EXT_RE.test(u)) return true;
+          try { return FILE_EXT_RE.test(decodeURIComponent(u)); } catch { return false; }
+        };
+        const isFile = fileish(src) || fileish(res.url);
+        // 起播看门狗：HEVC-TS 等播放器解不了的流，分片正常下载但 MSE 进不了帧，
+        // readyState 永远停在 0 且不触发 hls.js fatal error；大文件直链走 /stream
+        // 代理时 moov 在尾部、Range 回读也要时间，60s 无 metadata 才判死
+        const armWatchdog = () => {
+          if (playbackWatchdogRef.current) window.clearTimeout(playbackWatchdogRef.current);
+          playbackWatchdogRef.current = window.setTimeout(() => {
+            playbackWatchdogRef.current = null;
+            if (cancelled || video.readyState > 0) return;
+            setBuffering(false);
+            setPlayerError('该线路一直未能起播：可能是浏览器不支持的编码（如 4K 蓝光 HEVC 线），请更换线路');
+          }, 60000);
+        };
 
-        if (isHls && Hls.isSupported()) {
+        if (!isFile && Hls.isSupported()) {
           // 前向缓冲 5 分钟：maxBufferSize 同步放大否则高码率下会先被字节数截断；
           // backBufferLength 限制已播部分留存，避免长片整个留在内存里
           const hls = new Hls({
@@ -230,20 +271,52 @@ export const WatchView: React.FC = () => {
           hls.loadSource(src);
           hls.attachMedia(video);
           hls.on(Hls.Events.ERROR, (_evt, data) => {
-            if (data.fatal && !cancelled) {
-              setBuffering(false);
-              setPlayerError('视频加载失败，请重试或换个线路');
+            if (!data.fatal || cancelled) return;
+            // 无后缀 mp4 直链被当成 m3u8 喂给 hls.js 时报清单解析/加载错误：降级 video.src 原生播放
+            if (/MANIFEST_(LOAD|PARSING)_ERROR/.test(String(data.details))) {
+              hls.destroy();
+              if (hlsRef.current === hls) hlsRef.current = null;
+              video.src = src;
+              video.play().then(() => setIsPlaying(true)).catch(() => {});
+              return;
             }
+            setBuffering(false);
+            // 编码能力不匹配（如 EAC3 音频/HEVC 视频无解码支持）给出针对性提示
+            setPlayerError(/BUFFER_CODEC/i.test(String(data.details))
+              ? '该线路音视频编码浏览器不支持，请更换线路'
+              : '视频加载失败，请重试或换个线路');
           });
           hlsRef.current = hls;
+          armWatchdog();
         } else {
           video.src = src;
+          armWatchdog();
         }
         video.play().then(() => setIsPlaying(true)).catch(() => {});
       } catch (e: any) {
         if (!cancelled) {
           setBuffering(false);
           const msg = String(e?.message || '播放地址获取失败');
+          // 令牌过期类失败：重拉站点详情换新选集 token 自动重试（重拉后集 id 变化、
+          // 按集数号延续进度，播放效果会自动重新起播）。设备离线重拉无意义，跳过
+          const refreshKey = `${selectedMatch.siteKey}:${activeLine.flag}`;
+          const last = tokenRefreshRef.current;
+          const mayRefresh =
+            !/设备未连接|device offline/i.test(msg) &&
+            (!last || last.key !== refreshKey || Date.now() - last.t > 30_000);
+          if (mayRefresh) {
+            tokenRefreshRef.current = { key: refreshKey, t: Date.now() };
+            showToast('线路选集令牌已过期，正在刷新线路重试…', 'info');
+            setPlayerLoading(true);
+            try {
+              const flags = await selectMatch(movieId, selectedMatch, false);
+              // 重拉会把激活线路重置回第一条：切回用户当前线路，集数按编号延续
+              const idx = flags?.findIndex((f) => f.flag === activeLine.flag) ?? -1;
+              if (idx > 0) selectFlag(movieId, idx, false);
+            } catch { /* 重拉失败走下面的错误展示 */ }
+            if (!cancelled) setPlayerLoading(false);
+            return;
+          }
           setPlayerError(
             /设备未连接|device offline/i.test(msg)
               ? '播放设备不在线，打开 App 后点击重试'
@@ -255,7 +328,13 @@ export const WatchView: React.FC = () => {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (playbackWatchdogRef.current) {
+        window.clearTimeout(playbackWatchdogRef.current);
+        playbackWatchdogRef.current = null;
+      }
+    };
   }, [resource?.status, scanGateOpen, currentEpisode?.id, selectedMatch?.siteKey, activeLine?.flag, playNonce]);
 
   useEffect(() => () => destroyHls(), [destroyHls]);
@@ -284,13 +363,17 @@ export const WatchView: React.FC = () => {
     return () => clearInterval(timer);
   }, [movieId, currentEpisode?.id, duration, recordWatchProgress]);
 
-  // 大屏下影片信息卡高度与播放器保持一致（宽度/窗口变化时跟随，内容超出时卡内滚动）
+  // 大屏下影片信息卡高度与播放器保持一致（宽度/窗口变化时跟随，内容超出时卡内滚动）。
+  // 依赖 movie：启动只预载 catalogAll 的 139 部热门片，玩具总动员5 等长尾片进播放页时
+  // 首帧 !movie 走加载分支、refs 未挂载，依赖为空会让本效果只跑一次且扑空，详情异步
+  // 加载完成后不再同步——信息卡按内容自然高度撑开、超过播放器（齐高失效实例）
   useEffect(() => {
     const player = playerContainerRef.current;
     const info = infoRef.current;
     if (!player || !info || typeof ResizeObserver === 'undefined') return;
     const mq = window.matchMedia('(min-width: 1024px)');
     const apply = () => {
+      // 仅大屏左右并排时齐高；移动端信息区在播放器下方独立成块，清掉内联高度防误压缩
       info.style.height = mq.matches ? `${player.offsetHeight}px` : '';
     };
     apply();
@@ -300,8 +383,9 @@ export const WatchView: React.FC = () => {
     return () => {
       ro.disconnect();
       mq.removeEventListener('change', apply);
+      info.style.height = '';
     };
-  }, []);
+  }, [movie?.id]);
 
   // Control auto-hide
   const handleMouseMove = useCallback(() => {
@@ -413,13 +497,33 @@ export const WatchView: React.FC = () => {
     showToast(`倍速已调整为 ${rate}x`, 'info');
   };
 
+  const [orientation, setOrientation] = useState<OrientationLock>('landscape');
+
   const handleToggleFullscreen = () => {
     if (!playerContainerRef.current) return;
     if (!document.fullscreenElement) {
-      playerContainerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      playerContainerRef.current.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+        // 手机上全屏默认横屏（桌面引擎窗口已够宽无需旋转；Screen Orientation lock 仅移动端全屏生效）
+        if (isMobileDevice()) {
+          setOrientation('landscape');
+          lockOrientation('landscape');
+        }
+      }).catch(() => {});
     } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+        unlockOrientation();
+      }).catch(() => {});
     }
+  };
+
+  // 全屏内切换横竖屏（仅移动端显示）
+  const handleRotateOrientation = () => {
+    const next: OrientationLock = orientation === 'landscape' ? 'portrait' : 'landscape';
+    setOrientation(next);
+    lockOrientation(next);
+    showToast(next === 'landscape' ? '已切换为横屏' : '已切换为竖屏', 'info');
   };
 
   const handleSwitchEpisode = (ep: Episode) => {
@@ -458,6 +562,29 @@ export const WatchView: React.FC = () => {
     .filter((r) => r.status === 'ok' && r.flag && r.metrics)
     .sort(compareRecommended)
     .slice(0, 3);
+
+  // 播放器下方加载提示：聚合所有进行中的加载动作（搜索站点/获取选集/智能测速/补充探测/
+  // 懒补测/解析播放地址），逐条展示动画与友好文案，用户始终知道系统在忙什么
+  const busyHints: string[] = [];
+  if (resource?.status === 'searching') busyHints.push('正在设备站点中搜索片源，找到后自动进入测速选源…');
+  if (resource?.status === 'selecting')
+    busyHints.push(`正在「${resource.selected?.siteName || '来源站点'}」获取线路与选集…`);
+  if (scan?.status === 'running')
+    busyHints.push(
+      scan.extending
+        ? `正在补充探测其余站点的线路（已测 ${scan.finished}/${scan.total || '…'} 条），结果实时并入推荐`
+        : `正在智能测速选源（已测 ${scan.finished}/${scan.total || '…'} 条），选出较快线路后自动播放`
+    );
+  if (probingSites.size > 0) {
+    const names = (resource?.matches || [])
+      .filter((m) => probingSites.has(m.siteKey))
+      .map((m) => m.siteName)
+      .slice(0, 3)
+      .join('、');
+    busyHints.push(`正在补测 ${probingSites.size} 个站点的线路${names ? `：${names}${probingSites.size > 3 ? ' 等' : ''}` : ''}…`);
+  }
+  if (playerLoading && scanGateOpen && !playerError && resource?.status === 'ready')
+    busyHints.push('正在解析播放地址…');
 
   const applySource = async (siteKey: string, flag: string | undefined, manual = true) => {
     if (!resource) return;
@@ -561,6 +688,28 @@ export const WatchView: React.FC = () => {
           <WifiOff className="w-12 h-12 text-rose-400" />
           <p className="text-sm text-zinc-200">播放设备不在线</p>
           <p className="text-xs text-zinc-500">打开电视端 App 后点击重试</p>
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={() => resolveResources(movieId)}
+              className="px-5 py-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold"
+            >
+              重试
+            </button>
+            <button
+              onClick={() => navigateTo('detail', { movieId })}
+              className="px-5 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200"
+            >
+              返回详情
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (resource?.status === 'error') {
+      return (
+        <div className="absolute inset-0 z-20 bg-black/70 flex flex-col items-center justify-center gap-3">
+          <WifiOff className="w-12 h-12 text-rose-400" />
+          <p className="text-sm text-zinc-200">{resource.error || '资源解析失败'}</p>
           <div className="flex items-center gap-2 mt-1">
             <button
               onClick={() => resolveResources(movieId)}
@@ -692,7 +841,7 @@ export const WatchView: React.FC = () => {
             <video
               ref={videoRef}
               poster={movie.backdrop || movie.cover}
-              onClick={handlePlayPause}
+              onClick={() => { handlePlayPause(); handleMouseMove(); }}
               onTimeUpdate={handleTimeUpdate}
               onProgress={handleProgress}
               onLoadedMetadata={handleLoadedMetadata}
@@ -710,6 +859,29 @@ export const WatchView: React.FC = () => {
             {/* Dynamic status overlays */}
             {renderPlayerOverlay()}
 
+            {/* 移动端防误触锁定：右侧垂直居中，随控制栏显隐（点播放器唤醒、几秒自动淡出）；
+                锁定后覆盖层拦截一切交互，仅此按钮可点（隐藏时点屏幕唤醒） */}
+            {isMobileDevice() && (
+              <button
+                onClick={() => setControlsLocked((v) => !v)}
+                title={controlsLocked ? '解锁播放器操作' : '锁定播放器操作'}
+                className={`absolute right-3 top-1/2 -translate-y-1/2 z-50 w-9 h-9 rounded-full flex items-center justify-center text-white/90 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] transition-opacity duration-300 ${
+                  showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                }`}
+              >
+                {controlsLocked
+                  ? <LockOpen className="w-4 h-4" />
+                  : <Lock className="w-4 h-4" />}
+              </button>
+            )}
+            {controlsLocked && (
+              <div
+                className="absolute inset-0 z-40"
+                onClick={handleMouseMove}
+                onMouseMove={handleMouseMove}
+              />
+            )}
+
             {/* 视频缓冲加载动画（起播 / 卡顿 / 拖动进度条时） */}
             {buffering && !playerError && (
               <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
@@ -721,10 +893,14 @@ export const WatchView: React.FC = () => {
               </div>
             )}
 
-            {/* Controls Bar Overlay (Fades out when inactive) */}
+            {/* Controls Bar Overlay (Fades out when inactive；锁定时整体隐藏防误触) */}
             <div
               className={`absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/95 via-black/70 to-transparent p-2.5 sm:p-4 md:p-6 pb-2.5 sm:pb-4 transition-opacity duration-300 ${
-                showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                controlsLocked
+                  ? 'opacity-0 pointer-events-none'
+                  : showControls
+                    ? 'opacity-100'
+                    : 'opacity-0 pointer-events-none'
               }`}
             >
               {/* Timeline Scrubber */}
@@ -813,6 +989,16 @@ export const WatchView: React.FC = () => {
 
                 {/* Right controls */}
                 <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+                  {/* 屏幕旋转：仅移动端全屏时显示（Screen Orientation lock 只在全屏下生效） */}
+                  {isMobileDevice() && isFullscreen && (
+                    <button
+                      onClick={handleRotateOrientation}
+                      className="p-1 sm:p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white transition-colors"
+                      title={orientation === 'landscape' ? '切换为竖屏' : '切换为横屏'}
+                    >
+                      <Smartphone className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform ${orientation === 'landscape' ? 'rotate-90' : ''}`} />
+                    </button>
+                  )}
                   {/* Fullscreen Toggle */}
                   <button
                     onClick={handleToggleFullscreen}
@@ -895,7 +1081,28 @@ export const WatchView: React.FC = () => {
           </aside>
         </div>
 
-        {/* 播放源与选集（原详情页功能移入）：当前线路按钮 + 扫描进度 + 选集按钮 */}
+        {/* 加载状态汇总（播放器正下方）：任何进行中的加载动作都在这里展示动画与友好提示，
+            测速/补充探测进行中附带进度条 */}
+        {busyHints.length > 0 && (
+          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3 space-y-2.5">
+            {busyHints.map((h) => (
+              <div key={h} className="flex items-center gap-2.5 min-w-0">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400 shrink-0" />
+                <p className="text-xs text-zinc-300 truncate">{h}</p>
+              </div>
+            ))}
+            {scan?.status === 'running' && (
+              <div className="h-1.5 rounded-full bg-zinc-800/80 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
+                  style={{ width: scan.total ? `${Math.min(100, (scan.finished / scan.total) * 100)}%` : '8%' }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 播放源与选集（原详情页功能移入）：当前线路按钮 + 选集按钮 */}
           <div className="rounded-3xl bg-zinc-900/60 border border-zinc-800 p-4 sm:p-5 space-y-4">
             <div className="space-y-2.5">
               {/* 当前线路：独立分区标题，与推荐线路/选集区分 */}
@@ -906,21 +1113,19 @@ export const WatchView: React.FC = () => {
               </div>
               <button
                 onClick={() => setSourceModalOpen(true)}
-                className="w-full flex items-center justify-between gap-3 rounded-2xl border border-zinc-700/80 bg-zinc-800/60 hover:bg-zinc-700/60 hover:border-zinc-600 px-4 py-3 transition-colors text-left"
+                className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 rounded-2xl border border-zinc-700/80 bg-zinc-800/60 hover:bg-zinc-700/60 hover:border-zinc-600 px-4 py-3 transition-colors text-left"
               >
-                <span className="min-w-0">
-                  <span className="block text-sm font-bold text-zinc-100 truncate">
-                    {selectedMatch?.siteName}{activeLine?.flag ? ` · ${activeLine.flag}` : ' 选择线路'}
-                  </span>
+                <span className="min-w-0 block text-sm font-bold text-zinc-100 truncate">
+                  {selectedMatch?.siteName}{activeLine?.flag ? ` · ${activeLine.flag}` : ' 选择线路'}
                 </span>
-                <span className="flex items-center gap-2.5 shrink-0">
+                <span className="flex items-center gap-2.5 shrink-0 sm:justify-end">
                   {(() => {
                     const r = flagResult(activeLine?.flag || '');
                     if (r && r.status === 'ok' && r.metrics) return <MetricBadges metrics={r.metrics} />;
                     if (r?.status === 'fail') return <span className="text-[10px] font-bold text-rose-400/90">✕ 探测失败</span>;
                     return scan?.status === 'running' ? (
                       <span className="flex items-center gap-1 text-[10px] text-zinc-500 whitespace-nowrap">
-                        <Loader2 className="w-3 h-3 animate-spin" /> 待测速
+                        <Loader2 className="w-3 h-3 animate-spin shrink-0" /> 待测速
                       </span>
                     ) : null;
                   })()}
@@ -928,26 +1133,7 @@ export const WatchView: React.FC = () => {
                 </span>
               </button>
 
-              {/* 扫描进度：直接在当前线路区域展示，无需打开弹窗 */}
-              {scan && scan.status === 'running' && (
-                <div className="space-y-1.5 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-2 text-[11px]">
-                    <span className="flex items-center gap-1.5 text-emerald-300 font-bold min-w-0">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                      <span className="truncate">正在智能测速选源，结果实时更新</span>
-                    </span>
-                    <span className="text-zinc-400 shrink-0 whitespace-nowrap font-mono tabular-nums">
-                      {scan.finished}/{scan.total || '…'} 条 · {scan.total ? Math.min(100, Math.round((scan.finished / scan.total) * 100)) : 0}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-zinc-800/80 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
-                      style={{ width: scan.total ? `${Math.min(100, (scan.finished / scan.total) * 100)}%` : '8%' }}
-                    />
-                  </div>
-                </div>
-              )}
+              {/* 扫描进度与选集获取提示已上移到播放器下方的加载状态条 */}
               {scan && scan.status === 'done' && (
                 <div className="flex items-center justify-between gap-2 text-[11px] px-1">
                   <span className="text-zinc-500 shrink-0">
@@ -960,13 +1146,7 @@ export const WatchView: React.FC = () => {
                 </div>
               )}
 
-              {/* 资源状态：选集获取中 / 失败可重试 / 该来源无选集（不再静默空白） */}
-              {resource?.status === 'selecting' && (
-                <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 px-1">
-                  <Loader2 className="w-3 h-3 animate-spin text-emerald-400 shrink-0" />
-                  <span className="truncate">正在「{resource.selected?.siteName}」获取线路与选集…</span>
-                </div>
-              )}
+              {/* 资源状态：失败可重试 / 该来源无选集（不再静默空白；获取中提示在播放器下方加载条） */}
               {resource?.status === 'error' && (
                 <div className="flex items-center justify-between gap-2 text-[11px] px-1">
                   <span className="text-rose-300/80 truncate">线路获取失败：{resource.error || '未知错误'}</span>
@@ -1091,7 +1271,7 @@ export const WatchView: React.FC = () => {
           </div>
       </div>
 
-      {/* 选源弹窗：全部站点线路分组展示，未探测站点可单站懒补测 */}
+      {/* 选源弹窗：全部站点线路分组展示，未探测站点可单站懒补测，已探测站点可强制重探 */}
       <SourcePickerModal
         open={sourceModalOpen}
         onClose={() => setSourceModalOpen(false)}
@@ -1102,6 +1282,11 @@ export const WatchView: React.FC = () => {
         selectedFlag={activeLine?.flag}
         probingSites={probingSites}
         onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
+        onReprobeAll={() => {
+          const keys = [...new Set((scan?.results || []).map((r) => r.siteKey))];
+          if (keys.length) reprobeSites(movieId, keys);
+        }}
+        onReprobeSite={(siteKey) => reprobeSites(movieId, [siteKey])}
         onSelect={(siteKey, flag) => {
           setSourceModalOpen(false);
           applySource(siteKey, flag);
