@@ -508,12 +508,27 @@ def _flag_quality_bonus(flag: str) -> float:
     return next((b for tok, b in FLAG_QUALITY_BONUS if tok in f), 0.0)
 
 
+def _duration_abnormal(metrics: dict | None) -> bool:
+    """时长明显偏短或偏长的线路必须与正常线路分层，不能靠其他指标翻盘。"""
+    return bool(metrics and metrics.get("durationMatch") in ("short", "long"))
+
+
+def _recommendation_sort_key(r: dict) -> tuple:
+    """最终推荐排序：时长异常绝对沉底，其后才比较广告与综合质量。"""
+    metrics = r.get("metrics") or {}
+    total = (metrics.get("scores") or {}).get("total") or 0.0
+    adjusted = total - 0.06 * _site_ad_rate(r.get("siteKey") or "")
+    return (1 if _duration_abnormal(metrics) else 0,
+            AD_RANK.get(metrics.get("adLevel"), len(AD_RANK)),
+            -adjusted)
+
+
 def _line_good(r: dict) -> bool:
     """达标线路：可用、无确认广告、时长比对正常、吞吐达标。"""
     if r.get("status") != "ok" or not r.get("metrics"):
         return False
     m = r["metrics"]
-    return (m.get("adLevel") != "dirty" and m.get("durationMatch") != "short"
+    return (m.get("adLevel") != "dirty" and not _duration_abnormal(m)
             and (m.get("throughputMbps") or 0.0) >= GOOD_MIN_MBPS)
 
 
@@ -835,13 +850,41 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
             def pkey(r: dict) -> str:
                 return f"{r['siteKey']}::{r['flag']}"
 
-            def padj(r: dict) -> float:
-                return r["metrics"]["scores"]["total"] - 0.06 * _site_ad_rate(r["siteKey"])
-
             _emit(task, {"type": "meta", "total": 0})
             _emit(task, {"type": "done", "total": len(prior), "stoppedEarly": True,
-                         "recommended": pkey(sorted(ok, key=lambda r: (AD_RANK[r["metrics"]["adLevel"]], -padj(r)))[0]) if ok else None})
+                         "recommended": pkey(min(ok, key=_recommendation_sort_key)) if ok else None})
             return
+        # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序）。
+        # 前端会把当前/历史来源放在 matches 首位；同先验时保留该顺序，让它优先进入详情首批。
+        site_priors = {m["key"]: _site_prior(m["key"]) for m in matches}
+
+        def site_order(idx_m: tuple[int, dict]) -> float:
+            idx, m = idx_m
+            if idx == 0:
+                return -2.0  # 前端置顶的当前/历史来源（冷搜时为搜索首选）固定进入详情首批
+            return -((0.5 if site_priors[m["key"]] is None else site_priors[m["key"]]) - 0.002 * idx)
+
+        ordered_matches = [m for _, m in sorted(enumerate(matches), key=site_order)]
+
+        def detail_candidates(m: dict, data: dict) -> tuple[list[dict], list[dict]]:
+            """把一个站点详情拆成关键词优先线路和普通线路候选。"""
+            priority_lines, normal_lines = [], []
+            flags = sorted(data.get("flags") or [], key=lambda f: _flag_rank(f.get("flag") or ""))
+            queued = 0
+            for f in flags:
+                eps = f.get("episodes") or []
+                if not eps or not eps[0].get("url"):
+                    continue
+                cand = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
+                        "vodId": m["id"], "flag": f.get("flag", ""),
+                        "episodeId": eps[0]["url"]}
+                if _flag_rank(f.get("flag") or "") == 0:
+                    priority_lines.append(cand)
+                elif queued < FLAGS_PER_SITE:
+                    normal_lines.append(cand)
+                    queued += 1
+            return priority_lines, normal_lines
+
         sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
 
         async def one_detail(m: dict):
@@ -852,48 +895,71 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                 except Exception:
                     return m, None
 
-        pairs = await asyncio.gather(*[one_detail(m) for m in matches])
+        # 缓存命中会一次给到最多 60 个站点。旧实现 gather 全部详情后才发首条 result，
+        # 3 并发 × 慢站点会让选源弹窗长时间空白。先处理排序最前的一批，并在首个可用
+        # 详情完成时立即探测一条线路；其余详情随后仍按原全局排序/额度规则处理。
+        pairs: list[tuple[dict, dict | None]] = []
+        early_probe_keys: set[str] = set()
+        early_priority_count = 0
+        early_probe_done = False
 
-        # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序）。
+        async def collect_details(items: list[dict], allow_early_probe: bool):
+            nonlocal early_probe_done, early_priority_count
+            tasks = [asyncio.create_task(one_detail(m)) for m in items]
+            try:
+                for future in asyncio.as_completed(tasks):
+                    m, data = await future
+                    pairs.append((m, data))
+                    if data is None:
+                        failure = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
+                                   "vodId": m["id"], "flag": "", "status": "fail",
+                                   "error": "详情获取失败"}
+                        results.append(failure)
+                        _emit(task, {"type": "result", "result": failure})
+                        continue
+                    if not allow_early_probe or early_probe_done:
+                        continue
+                    site_priority, site_normal = detail_candidates(m, data)
+                    cand = (site_priority + site_normal)[0] if site_priority or site_normal else None
+                    if cand is None:
+                        continue
+                    early_probe_done = True
+                    result = await probe_candidate(cand, ref_s)
+                    is_priority = _flag_rank(cand.get("flag") or "") == 0
+                    result["prio"] = is_priority
+                    results.append(result)
+                    early_probe_keys.add(f"{cand['siteKey']}::{cand['flag']}")
+                    if is_priority:
+                        early_priority_count += 1
+                    _emit(task, {"type": "result", "result": result})
+            finally:
+                for pending in tasks:
+                    if not pending.done():
+                        pending.cancel()
+
+        await collect_details(ordered_matches[:DETAIL_CONCURRENCY], True)
+        await collect_details(ordered_matches[DETAIL_CONCURRENCY:], False)
+
         # 线路按名字启发式分流：4K/蓝光/超清等进优先批次（全局 ≤PRIORITY_LINES_CAP 条全量实测，
         # 不足 PRIORITY_FILL_MIN 条时从普通批次按排序补齐，超额时按"站点先验 + 关键词规格"
         # 全局择优），其余进普通批次（每站 ≤FLAGS_PER_SITE 条，达标即停）
-        priors = {m["key"]: _site_prior(m["key"]) for m in matches}
-
-        def site_order(idx_m: tuple[int, dict]) -> float:
-            idx, m = idx_m
-            return -((0.5 if priors[m["key"]] is None else priors[m["key"]]) - 0.002 * idx)
-
-        ordered = sorted(enumerate(matches), key=site_order)
+        priority_cap = max(0, priority_cap - early_priority_count)
         prio_pool: list[dict] = []  # 全部关键词线路候选：全局排序后再截优先额度（超额择优）
         site_normals: dict[str, list[dict]] = {}  # 各站普通线路切片（站内已按线路名启发式排序）
         pair_by_key = {m["key"]: d for m, d in pairs}
-        for _, m in ordered:
+        for m in ordered_matches:
             data = pair_by_key.get(m["key"])
             if data is None:
-                results.append({"siteKey": m["key"], "siteName": m.get("name") or m["key"],
-                                "vodId": m["id"], "flag": "", "status": "fail", "error": "详情获取失败"})
                 continue
-            flags = sorted(data.get("flags") or [], key=lambda f: _flag_rank(f.get("flag") or ""))
-            queued = 0  # 本站已入队普通批候选数（关键词线路不计入：其负载由全局优先额度约束）
-            for f in flags:
-                eps = f.get("episodes") or []
-                if not eps or not eps[0].get("url"):
-                    continue
-                cand = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
-                        "vodId": m["id"], "flag": f.get("flag", ""),
-                        "episodeId": eps[0]["url"]}
-                if _flag_rank(f.get("flag") or "") == 0:
-                    prio_pool.append(cand)
-                    continue
-                if queued >= FLAGS_PER_SITE:
-                    continue
-                site_normals.setdefault(m["key"], []).append(cand)
-                queued += 1
+            site_priority, site_normal = detail_candidates(m, data)
+            prio_pool.extend(c for c in site_priority
+                             if f"{c['siteKey']}::{c['flag']}" not in early_probe_keys)
+            site_normals[m["key"]] = [c for c in site_normal
+                                      if f"{c['siteKey']}::{c['flag']}" not in early_probe_keys]
         # 关键词线路全局择优：超额（全网 4K/蓝光线 > 50 条）时不能"站点处理顺序先到先得"——
         # 按 站点历史先验（成功率/清晰度/速度/广告率）+ 关键词规格细分 降序取前 priority_cap 条；
         # 稳定排序保持站点先验序与站内线路原序
-        prio_pool.sort(key=lambda c: -((0.5 if priors[c["siteKey"]] is None else priors[c["siteKey"]])
+        prio_pool.sort(key=lambda c: -((0.5 if site_priors[c["siteKey"]] is None else site_priors[c["siteKey"]])
                                        + _flag_quality_bonus(c["flag"])))
         priority = prio_pool[:priority_cap]  # 优先线路：全部实测，不受达标即停限制
         # 额度外关键词线路回落普通批次：放回各自站点普通切片头部（关键词线路排本站普通线
@@ -902,7 +968,7 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         for cand in prio_pool[priority_cap:]:
             overflow.setdefault(cand["siteKey"], []).append(cand)
         normal: list[dict] = []
-        for _, m in ordered:
+        for m in ordered_matches:
             normal.extend((overflow.get(m["key"], []) + site_normals.get(m["key"], []))[:FLAGS_PER_SITE])
         # 优先批次不足 30 条（冷门片 4K/蓝光关键词线路少）：从普通批次头部（即排序规则下
         # 最优的普通线路：站点质量先验 → 线路名启发式）提级补齐到本轮优先额度 ≤50 条，
@@ -913,8 +979,7 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
             priority.extend(normal[:take])
             del normal[:take]
         _emit(task, {"type": "meta", "total": len(priority) + len(normal) + len(results)})
-        for r in results:
-            _emit(task, {"type": "result", "result": r})
+        # 详情失败和首条快速探测结果已实时发出，不能在 meta 后重复推送。
         # 此前各轮结果并入全局评估基数（不重发事件，前端已持有）：早停条件与最终
         # 推荐键均按"历史 + 本轮"合并口径判定
         results.extend(prior)
@@ -966,11 +1031,8 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         def key(r: dict) -> str:
             return f"{r['siteKey']}::{r['flag']}"
 
-        def adj(r: dict) -> float:
-            return r["metrics"]["scores"]["total"] - 0.06 * _site_ad_rate(r["siteKey"])
-
         _emit(task, {"type": "done", "total": len(results), "stoppedEarly": early_stop,
-                     "recommended": key(sorted(ok, key=lambda r: (AD_RANK[r["metrics"]["adLevel"]], -adj(r)))[0]) if ok else None,
+                     "recommended": key(min(ok, key=_recommendation_sort_key)) if ok else None,
                      "fastest": key(max(ok, key=lambda r: r["metrics"]["throughputMbps"])) if ok else None,
                      "highest": key(max(ok, key=lambda r: (r["metrics"].get("height") or 0,
                                                            r["metrics"].get("bitrateKbps") or 0))) if ok else None})

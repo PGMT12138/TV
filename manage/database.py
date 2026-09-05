@@ -173,6 +173,9 @@ def init_db():
             episode_number INTEGER DEFAULT 1,
             watched_seconds REAL DEFAULT 0,
             total_seconds REAL DEFAULT 0,
+            site_key TEXT DEFAULT '',
+            vod_id TEXT DEFAULT '',
+            flag TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
             UNIQUE (user_id, subject_id)
         )
@@ -181,6 +184,8 @@ def init_db():
     hist_cols = {r["name"] for r in conn.execute("PRAGMA table_info(history)")}
     if "site_key" not in hist_cols:
         conn.execute("ALTER TABLE history ADD COLUMN site_key TEXT DEFAULT ''")
+    if "vod_id" not in hist_cols:
+        conn.execute("ALTER TABLE history ADD COLUMN vod_id TEXT DEFAULT ''")
     if "flag" not in hist_cols:
         conn.execute("ALTER TABLE history ADD COLUMN flag TEXT DEFAULT ''")
 
@@ -309,6 +314,14 @@ def touch_search_cache(device_id: str, wd: str, last_checked: float):
     conn = get_conn()
     conn.execute("UPDATE search_cache SET last_checked=? WHERE device_id=? AND wd=?",
                  (last_checked, device_id, wd))
+    conn.commit()
+    conn.close()
+
+
+def delete_search_cache(device_id: str, wd: str):
+    """删除指定设备、搜索词的聚合搜索缓存。"""
+    conn = get_conn()
+    conn.execute("DELETE FROM search_cache WHERE device_id=? AND wd=?", (device_id, wd))
     conn.commit()
     conn.close()
 

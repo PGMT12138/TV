@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../context/AppContext';
 import {
   History,
@@ -15,8 +16,8 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-const DEFAULT_PAGE_SIZE = 20;
-const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const DEFAULT_PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 export const HistoryView: React.FC = () => {
   const { watchHistory, deleteHistoryItem, clearAllHistory, navigateTo } = useApp();
@@ -436,10 +437,13 @@ export const HistoryView: React.FC = () => {
       )}
 
       {/* Clear Confirmation Modal */}
-      {showClearConfirmModal && (
+      {showClearConfirmModal && createPortal(
         <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[100] min-h-[100dvh] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
           onClick={() => setShowClearConfirmModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-history-title"
         >
           <div
             className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4 text-zinc-100"
@@ -450,7 +454,7 @@ export const HistoryView: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-lg font-bold text-white">确认清空全部播放历史？</h3>
+              <h3 id="clear-history-title" className="text-lg font-bold text-white">确认清空全部播放历史？</h3>
               <p className="text-xs text-zinc-400 mt-1">
                 此操作将永久清除全部 {watchHistory.length} 条播放进度，无法撤销。
               </p>
@@ -474,7 +478,8 @@ export const HistoryView: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

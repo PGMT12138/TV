@@ -18,9 +18,12 @@ interface Props {
   selectedSiteKey?: string;
   selectedFlag?: string;
   onSelect: (siteKey: string, flag?: string) => void;
+  researching?: boolean;                           // 清空旧资源并重新搜索中
+  onResearch?: () => void;                         // 二次确认后重新搜索全部站点
   probingSites?: Set<string>;                    // 懒补测进行中的站点
   onProbeSite?: (siteKey: string) => void;       // 发起单站懒补测
-  onReprobeAll?: () => void;                     // 全量重探全部已探测站点
+  onProbeAllUnprobed?: () => void;               // 一次批量探测全部未探测站点
+  onReprobeRecommended?: (siteKeys: string[]) => void; // 只重探推荐分组中的站点
   onReprobeSite?: (siteKey: string) => void;     // 全量重探单站
 }
 
@@ -36,28 +39,41 @@ const GROUP_STYLE: Record<string, { panel: string; dot: string; label: string }>
 
 export const SourcePickerModal: React.FC<Props> = ({
   open, onClose, scan, matches, isFeature, selectedSiteKey, selectedFlag, onSelect,
-  probingSites, onProbeSite, onReprobeAll, onReprobeSite,
+  researching, onResearch, probingSites, onProbeSite, onProbeAllUnprobed, onReprobeRecommended, onReprobeSite,
 }) => {
   // 分组折叠：推荐默认展开，其余默认收起
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ recommended: true });
+  const [confirmResearch, setConfirmResearch] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setConfirmResearch(false);
+      return;
+    }
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (confirmResearch) setConfirmResearch(false);
+        else onClose();
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  }, [open, onClose, confirmResearch]);
 
   if (!open) return null;
 
-  // 有部分结果即分组展示（扫描中渐进出现），完全无结果才显示占位
-  const grouped = (scan?.results?.length || 0) > 0;
+  // 搜索命中的站点应立即展示；测速尚未产出时由 classifySites 归入“未探测”。
+  // 缓存命中会一次返回最多 60 个站点，不能再用首条测速结果作为列表展示门槛。
+  const grouped = matches.length > 0;
   const { groups } = grouped
-    ? classifySites(scan!.results, matches, isFeature)
+    ? classifySites(scan?.results || [], matches, isFeature)
     : { groups: null as Record<string, ReturnType<typeof classifySites>['groups']['recommended']> | null };
   const okCount = (scan?.results || []).filter((r) => r.status === 'ok' && r.flag).length;
+  const manualProbing = (probingSites?.size || 0) > 0;
+  // scan 为空时表示进入播放页后的自动探测尚未启动；只有明确 done 后才开放手动批量/单站探测，
+  // 避免 ready → startScan 的短暂渲染间隙里误点并启动第二个扫描流。
+  const automaticProbePending = scan?.status !== 'done';
+  const probeBusy = !!researching || automaticProbePending || manualProbing;
 
   return createPortal(
     <div
@@ -71,22 +87,21 @@ export const SourcePickerModal: React.FC<Props> = ({
         {/* 头部：标题 + 扫描进度 / 汇总（早停时说明原因） */}
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-zinc-800 bg-zinc-900/95 shrink-0">
           <div className="min-w-0">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <ListVideo className="w-4 h-4 text-emerald-400" />
                 选择来源与线路
               </h3>
-              {/* 重新探测全部已探测站点：逐线全量实测，不做达标即停 */}
-              {onReprobeAll && (scan?.results?.length || 0) > 0 && (
+              {onResearch && (
                 <button
-                  onClick={onReprobeAll}
-                  disabled={scan?.status === 'running' || (probingSites?.size || 0) > 0}
-                  title="重新实测全部已探测的站点线路（全量不早停）"
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                  onClick={() => setConfirmResearch(true)}
+                  disabled={researching}
+                  title="清空当前影片的搜索缓存、来源偏好和选源结果后重新搜索"
+                  className="h-6 flex items-center gap-1 px-2 rounded-lg bg-rose-500/10 border border-rose-500/35 text-rose-300 text-[10px] leading-none font-bold hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
                 >
-                  {(probingSites?.size || 0) > 0
-                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> 重探中…</>
-                    : <><RefreshCw className="w-3.5 h-3.5" /> 重新探测</>}
+                  {researching
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> 重新搜索中…</>
+                    : <><RefreshCw className="w-3 h-3" /> 重新搜索</>}
                 </button>
               )}
             </div>
@@ -94,7 +109,7 @@ export const SourcePickerModal: React.FC<Props> = ({
               {scan?.status === 'running'
                 ? `智能测速中 ${scan.finished}/${scan.total || '…'} 条线路，结果实时更新`
                 : grouped
-                  ? <>{okCount}/{scan!.results.length} 条线路可用 · {matches.length} 个站点
+                  ? <>{okCount}/{(scan?.results || []).length} 条线路可用 · {matches.length} 个站点
                       {scan?.stoppedEarly && <span className="text-emerald-300/90"> · 已锁定高质量线路，提前完成</span>}</>
                   : '尚未完成探测'}
             </p>
@@ -119,20 +134,55 @@ export const SourcePickerModal: React.FC<Props> = ({
             const style = GROUP_STYLE[g.key] || GROUP_STYLE.unprobed;
             return (
               <section key={g.key} className={`rounded-2xl border ${style.panel} overflow-hidden`}>
-                <button
-                  onClick={() => setOpenGroups((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
-                  className="w-full flex items-center gap-2.5 px-4 py-3 border-b border-white/5 hover:bg-white/[0.03] transition-colors"
-                >
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
-                  <span className={`text-xs font-bold shrink-0 ${style.label}`}>{g.label}</span>
-                  {g.hint && <span className="text-[10px] text-zinc-500 truncate">{g.hint}</span>}
-                  <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-black/30 text-zinc-400 tabular-nums">
-                      {entries.length} 站
+                <div className="flex items-center gap-2 border-b border-white/5 hover:bg-white/[0.03] transition-colors">
+                  <button
+                    onClick={() => setOpenGroups((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
+                    className="flex items-center gap-2.5 pl-4 py-3 text-left shrink-0"
+                  >
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
+                    <span className={`text-xs leading-5 font-bold shrink-0 ${style.label}`}>{g.label}</span>
+                  </button>
+                  {g.key === 'unprobed' && onProbeAllUnprobed && (
+                    <button
+                      onClick={onProbeAllUnprobed}
+                      disabled={probeBusy}
+                      title={automaticProbePending
+                        ? '进入播放页后的自动探测结束后才可使用'
+                        : `按受控并发逐步探测全部 ${entries.length} 个未探测站点`}
+                      className="h-5 flex items-center gap-1 px-2 rounded-lg bg-sky-500/15 border border-sky-500/40 text-sky-300 text-[10px] leading-none font-bold hover:bg-sky-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                    >
+                      {automaticProbePending
+                        ? <><Loader2 className="w-3 h-3 animate-spin" /> 等待自动探测…</>
+                        : manualProbing
+                        ? <><Loader2 className="w-3 h-3 animate-spin" /> 探测中…</>
+                        : <><Radar className="w-3 h-3" /> 一键探测未测</>}
+                    </button>
+                  )}
+                  {g.key === 'recommended' && onReprobeRecommended && (
+                    <button
+                      onClick={() => onReprobeRecommended(entries.map((e) => e.match.siteKey))}
+                      disabled={probeBusy}
+                      title={`只重新完整探测推荐分组中的 ${entries.length} 个站点`}
+                      className="h-5 flex items-center gap-1 px-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] leading-none font-bold hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                    >
+                      {manualProbing
+                        ? <><Loader2 className="w-3 h-3 animate-spin" /> 重探中…</>
+                        : <><RefreshCw className="w-3 h-3" /> 重新探测</>}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setOpenGroups((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
+                    className="min-w-0 flex-1 flex items-center gap-2 py-3 pr-4 text-left"
+                  >
+                    {g.hint && <span className="text-[10px] text-zinc-500 truncate">{g.hint}</span>}
+                    <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-black/30 text-zinc-400 tabular-nums">
+                        {entries.length} 站
+                      </span>
+                      <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                     </span>
-                    <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                  </span>
-                </button>
+                  </button>
+                </div>
                 {isOpen && (
                   <div className="p-2.5 space-y-2">
                     {entries.map((e) => {
@@ -159,10 +209,10 @@ export const SourcePickerModal: React.FC<Props> = ({
                             )}
                             {hasLines && onReprobeSite && (
                               <button
-                                disabled={probing}
+                                disabled={probeBusy}
                                 onClick={() => onReprobeSite(e.match.siteKey)}
                                 title="全量重新探测该站点（不早停）"
-                                className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border text-[10px] transition-colors shrink-0 ${
+                                className={`h-5 flex items-center gap-1 px-1.5 rounded-md border text-[10px] leading-none transition-colors shrink-0 ${
                                   e.best?.metrics ? '' : 'ml-auto'
                                 } bg-zinc-800/80 border-zinc-700 text-zinc-400 hover:text-emerald-300 hover:border-emerald-500/40 disabled:opacity-50 disabled:cursor-not-allowed`}
                               >
@@ -174,7 +224,7 @@ export const SourcePickerModal: React.FC<Props> = ({
                             {!hasLines && onProbeSite && (
                               <span className="ml-auto flex items-center gap-1.5 shrink-0">
                                 <button
-                                  disabled={probing}
+                                  disabled={probeBusy}
                                   onClick={() => onProbeSite(e.match.siteKey)}
                                   className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold hover:bg-emerald-500/25 disabled:opacity-60 transition-colors"
                                 >
@@ -244,6 +294,40 @@ export const SourcePickerModal: React.FC<Props> = ({
             );
           })}
         </div>
+
+        {confirmResearch && (
+          <div
+            className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm flex items-center justify-center p-5"
+            onClick={(e) => { e.stopPropagation(); setConfirmResearch(false); }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="research-confirm-title"
+              className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4 id="research-confirm-title" className="text-base font-bold text-white">确认重新搜索站点？</h4>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">
+                将清除本影片的搜索缓存、历史来源偏好、当前线路和推荐线路，并清空选源面板后从 App 重新搜索。观看进度会保留。
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={() => setConfirmResearch(false)}
+                  className="px-4 py-2 rounded-xl border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => { setConfirmResearch(false); onResearch?.(); }}
+                  className="px-4 py-2 rounded-xl border border-rose-500/50 bg-rose-500/20 text-xs font-bold text-rose-200 hover:bg-rose-500/30 transition-colors"
+                >
+                  清除并重新搜索
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body

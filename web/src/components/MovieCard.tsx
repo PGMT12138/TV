@@ -148,13 +148,20 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               </span>
             )}
           </div>
+
+          {movie.cast.length > 0 && (
+            <p className="text-xs sm:text-sm leading-relaxed text-zinc-300 font-sans-modern line-clamp-2">
+              <span className="text-zinc-400">主演：</span>
+              {movie.cast.slice(0, 6).map((item) => item.name).join(' / ')}
+            </p>
+          )}
         </div>
 
-        {/* Bottom Section with Quote */}
-        {movie.tagline && (
+        {/* Bottom Section with Synopsis */}
+        {movie.description && (
           <div className={`border-t ${colorMap.borderAccent} pt-4 relative z-10`}>
             <p className="text-zinc-300 text-xs sm:text-sm leading-relaxed font-light line-clamp-2 italic font-sans-modern">
-              "{movie.tagline}"
+              {movie.description}
             </p>
           </div>
         )}

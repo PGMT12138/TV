@@ -4,7 +4,7 @@ import { compareRecommended } from './scanFormat';
 
 // 分组定义（顺序即展示顺序）
 export const SITE_GROUP_DEFS = [
-  { key: 'recommended', label: '推荐', hint: '探测可用，质量最优在前', cls: 'text-emerald-300' },
+  { key: 'recommended', label: '推荐', hint: '', cls: 'text-emerald-300' },
   { key: 'ads', label: '有广告', hint: '可用线路均含前置广告', cls: 'text-amber-300' },
   { key: 'duration', label: '时长异常', hint: '片长与主流版本差异大，疑似预告或内容不符', cls: 'text-orange-300' },
   { key: 'netdisk', label: '网盘', hint: '需扫码登录网盘后播放', cls: 'text-sky-300' },
@@ -36,7 +36,8 @@ export function classifySites(
     if (!e.match) continue;
     if (r.status === 'ok' && r.flag && r.metrics) {
       e.okAds.push(r.metrics.adLevel);
-      if (!e.best || r.metrics.scores.total > (e.best.metrics?.scores.total ?? 0)) e.best = r;
+      // 站内最优线路也遵循推荐分层：只要存在正常时长线路，异常线路就不能靠分数成为 best。
+      if (!e.best || compareRecommended(r, e.best) < 0) e.best = r;
       e.lines.push(r);
     } else if (r.flag) {
       e.lines.push(r);

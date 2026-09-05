@@ -4,26 +4,43 @@ import android.text.TextUtils;
 
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.BuildConfig;
+import com.fongmi.android.tv.Constant;
 import com.fongmi.android.tv.api.WebApi;
+import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.bean.Config;
+import com.fongmi.android.tv.bean.Site;
+import com.fongmi.android.tv.utils.Task;
 import com.fongmi.android.tv.utils.Util;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Prefers;
+import com.google.common.util.concurrent.FluentFuture;
+import com.google.common.util.concurrent.MoreExecutors;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -41,6 +58,7 @@ import okio.ByteString;
 public class Bridge {
 
     private final ExecutorService executor;
+    private final Map<Integer, SearchSession> searches;
     private volatile WebSocket ws;
     private volatile boolean running;
     private volatile String override;
@@ -55,6 +73,7 @@ public class Bridge {
 
     private Bridge() {
         executor = Executors.newCachedThreadPool();
+        searches = new ConcurrentHashMap<>();
     }
 
     public void start() {
@@ -145,11 +164,13 @@ public class Bridge {
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                cancelSearches(webSocket);
                 closed.countDown();
             }
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
+                cancelSearches(webSocket);
                 closed.countDown();
             }
         };
@@ -169,7 +190,15 @@ public class Bridge {
                     data = WebApi.category(params.optString("key"), params.optString("tid"), params.optString("pg"));
                     break;
                 case "search":
-                    data = WebApi.search(params.optString("key"), params.optString("wd"));
+                    data = WebApi.search(params.optString("key"), params.optString("wd"), params.optBoolean("quick", false));
+                    break;
+                case "searchAll":
+                    startSearchAll(webSocket, id, params);
+                    return;
+                case "cancelSearch":
+                    cancelSearch(params.optInt("searchId"));
+                    data = new JsonObject();
+                    data.addProperty("ok", true);
                     break;
                 case "detail":
                     data = WebApi.detail(params.optString("key"), params.optString("id"));
@@ -196,6 +225,163 @@ public class Bridge {
             reply(webSocket, id, data);
         } catch (Throwable e) {
             reply(webSocket, id, e.getMessage());
+        }
+    }
+
+    private void startSearchAll(WebSocket webSocket, int id, JSONObject params) {
+        SearchSession session = new SearchSession(webSocket, id, params);
+        SearchSession previous = searches.put(id, session);
+        if (previous != null) previous.cancel();
+        try {
+            session.start();
+        } catch (RuntimeException e) {
+            session.cancel();
+            throw e;
+        }
+    }
+
+    private void cancelSearch(int id) {
+        SearchSession session = searches.remove(id);
+        if (session != null) session.cancel();
+    }
+
+    private void cancelSearches(WebSocket webSocket) {
+        for (SearchSession session : new ArrayList<>(searches.values())) {
+            if (session.webSocket == webSocket) session.cancel();
+        }
+    }
+
+    /**
+     * 一次 searchAll 对应一个 App 内搜索批次。站点筛选、20 线程并发及单站超时与
+     * 原生搜索共用 Task.largeExecutor；每站结束立即回一条 site，全部结束回 done。
+     */
+    private class SearchSession {
+
+        private final WebSocket webSocket;
+        private final int id;
+        private final String keyword;
+        private final String preferred;
+        private final boolean quick;
+        private final Set<String> disabled;
+        private final List<Future<?>> futures;
+        private final AtomicBoolean cancelled;
+        private final AtomicInteger remaining;
+        private int searched;
+
+        SearchSession(WebSocket webSocket, int id, JSONObject params) {
+            this.webSocket = webSocket;
+            this.id = id;
+            this.keyword = params.optString("wd");
+            this.preferred = params.optString("preferred");
+            this.quick = params.optBoolean("quick", true);
+            this.disabled = new HashSet<>();
+            this.futures = new CopyOnWriteArrayList<>();
+            this.cancelled = new AtomicBoolean(false);
+            this.remaining = new AtomicInteger(0);
+            JSONArray array = params.optJSONArray("disabled");
+            if (array != null) for (int i = 0; i < array.length(); i++) disabled.add(array.optString(i));
+        }
+
+        synchronized void start() {
+            List<Site> available = new ArrayList<>();
+            for (Site site : VodConfig.get().getSites()) {
+                if (site.isHide() || !site.isSearchable()) continue;
+                if (quick && !site.isQuickSearch()) continue;
+                available.add(site);
+            }
+            List<Site> sites = new ArrayList<>();
+            for (Site site : available) if (!disabled.contains(site.getKey())) sites.add(site);
+            if (!TextUtils.isEmpty(preferred)) {
+                sites.sort((a, b) -> Boolean.compare(!a.getKey().equals(preferred), !b.getKey().equals(preferred)));
+            }
+            searched = sites.size();
+            remaining.set(searched);
+            sendMeta(available);
+            if (cancelled.get()) return;
+            if (sites.isEmpty()) {
+                sendDone();
+                return;
+            }
+            for (Site site : sites) {
+                FluentFuture<JsonObject> future = FluentFuture
+                        .from(Task.largeExecutor().submit(() -> WebApi.search(site.getKey(), keyword, quick)))
+                        .withTimeout(Constant.TIMEOUT_SEARCH, TimeUnit.MILLISECONDS, Task.scheduler());
+                futures.add(future);
+                future.addCallback(Task.callback(
+                        data -> siteDone(site, data, null),
+                        error -> siteDone(site, emptyResult(), error)
+                ), MoreExecutors.directExecutor());
+            }
+        }
+
+        private JsonObject emptyResult() {
+            JsonObject data = new JsonObject();
+            data.add("list", new JsonArray());
+            return data;
+        }
+
+        private void sendMeta(List<Site> available) {
+            try {
+                JSONObject msg = event("meta");
+                msg.put("sites", searched);
+                JSONArray array = new JSONArray();
+                for (Site site : available) {
+                    JSONObject item = new JSONObject();
+                    item.put("key", site.getKey());
+                    item.put("name", site.getName());
+                    array.put(item);
+                }
+                msg.put("availableSites", array);
+                send(msg);
+            } catch (Exception e) {
+                cancel();
+            }
+        }
+
+        private void siteDone(Site site, JsonObject data, Throwable error) {
+            if (cancelled.get()) return;
+            try {
+                JSONObject msg = event("site");
+                msg.put("siteKey", site.getKey());
+                msg.put("siteName", site.getName());
+                msg.put("data", new JSONObject(data.toString()));
+                if (error != null && !TextUtils.isEmpty(error.getMessage())) msg.put("error", error.getMessage());
+                send(msg);
+            } catch (Exception e) {
+                cancel();
+                return;
+            }
+            if (remaining.decrementAndGet() == 0) sendDone();
+        }
+
+        private void sendDone() {
+            if (!cancelled.compareAndSet(false, true)) return;
+            searches.remove(id, this);
+            try {
+                JSONObject msg = event("done");
+                msg.put("searched", searched);
+                webSocket.send(msg.toString());
+            } catch (Exception ignored) {
+            }
+            futures.clear();
+        }
+
+        private JSONObject event(String type) throws Exception {
+            JSONObject msg = new JSONObject();
+            msg.put("id", id);
+            msg.put("type", type);
+            return msg;
+        }
+
+        private void send(JSONObject msg) throws IOException {
+            if (cancelled.get() || !webSocket.send(msg.toString())) throw new IOException("ws closed");
+        }
+
+        synchronized void cancel() {
+            if (!cancelled.compareAndSet(false, true)) return;
+            searches.remove(id, this);
+            for (Future<?> future : futures) future.cancel(true);
+            futures.clear();
         }
     }
 

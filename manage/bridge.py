@@ -32,6 +32,7 @@ router = APIRouter()
 
 BRIDGE_TOKEN = os.environ.get("BRIDGE_TOKEN", "")  # 为空则不校验（本机测试）
 TIMEOUT_CMD = 90.0  # playerContent 可能很慢（网盘转存等）
+TIMEOUT_EVENT_IDLE = 40.0  # 批量搜索每站 30s 超时；连续 40s 无任何事件视为设备异常
 CHUNK = 65536
 HELLO_TIMEOUT = 10.0  # 等待连接首帧 hello 的超时
 
@@ -116,6 +117,7 @@ class Device:
         self.version = ""
         self.pending: dict[int, asyncio.Future] = {}
         self.streams: dict[int, asyncio.Queue] = {}
+        self.events: dict[int, asyncio.Queue] = {}
 
     @property
     def online(self):
@@ -127,8 +129,11 @@ class Device:
                 fut.set_exception(RuntimeError("device offline"))
         for q in self.streams.values():
             await q.put(None)
+        for q in self.events.values():
+            await q.put(None)
         self.pending.clear()
         self.streams.clear()
+        self.events.clear()
         self.ws = None
 
 
@@ -218,6 +223,10 @@ def _on_device_text(dev: Device, msg: dict):
     rid = msg.get("id")
     if rid is None:
         return
+    event_q = dev.events.get(rid)
+    if event_q is not None:
+        event_q.put_nowait(msg)
+        return
     if msg.get("type") in ("meta", "end", "error"):  # fetch 流控制帧
         q = dev.streams.get(rid)
         if q is not None:
@@ -250,6 +259,48 @@ async def call_device(action: str, params: dict, timeout: float = TIMEOUT_CMD) -
         return await asyncio.wait_for(fut, timeout)
     finally:
         dev.pending.pop(rid, None)
+
+
+async def stream_device_events(action: str, params: dict, idle_timeout: float = TIMEOUT_EVENT_IDLE):
+    """向设备发送一次命令并消费同一请求 id 的多条 JSON 事件，直到 done。
+
+    消费方提前断开时向 App 发送 cancelSearch，批量搜索不会继续占用设备线程池。
+    """
+    dev = active_device()
+    if dev is None or not dev.online:
+        raise RuntimeError("设备未连接")
+    rid = next(_ids)
+    q: asyncio.Queue = asyncio.Queue()
+    dev.events[rid] = q
+    finished = False
+    try:
+        await dev.ws.send_json({"id": rid, "action": action, "params": params})
+        while True:
+            try:
+                msg = await asyncio.wait_for(q.get(), idle_timeout)
+            except asyncio.TimeoutError as e:
+                raise RuntimeError("设备批量搜索响应超时") from e
+            if msg is None:
+                raise RuntimeError("设备已离线")
+            if msg.get("ok") is False:
+                raise RuntimeError(msg.get("error") or "device error")
+            if msg.get("type") == "error":
+                raise RuntimeError(msg.get("error") or "device error")
+            yield msg
+            if msg.get("type") == "done":
+                finished = True
+                return
+    finally:
+        dev.events.pop(rid, None)
+        if not finished and dev.online and dev.ws is not None:
+            try:
+                await dev.ws.send_json({
+                    "id": next(_ids),
+                    "action": "cancelSearch",
+                    "params": {"searchId": rid},
+                })
+            except Exception:
+                pass
 
 
 @router.get("/api/device")

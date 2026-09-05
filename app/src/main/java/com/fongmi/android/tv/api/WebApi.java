@@ -46,6 +46,7 @@ public class WebApi {
             item.addProperty("key", site.getKey());
             item.addProperty("name", site.getName());
             item.addProperty("searchable", site.isSearchable());
+            item.addProperty("quickSearch", site.isQuickSearch());
             array.add(item);
         }
         JsonObject data = new JsonObject();
@@ -89,8 +90,12 @@ public class WebApi {
     }
 
     public static JsonObject search(String key, String wd) throws Exception {
+        return search(key, wd, false);
+    }
+
+    public static JsonObject search(String key, String wd, boolean quick) throws Exception {
         Site site = site(key);
-        Result result = SiteApi.searchContent(site, wd, false, "1");
+        Result result = SiteApi.searchContent(site, wd, quick, "1");
         JsonArray array = new JsonArray();
         for (Vod vod : result.getList()) vodCard(array, site, vod);
         JsonObject data = new JsonObject();

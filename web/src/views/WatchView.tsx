@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../api';
 import { Episode, ScanCandidateResult, ScanMetrics, scanResultKey } from '../types';
-import { fmtSpeed, fmtRes, AD_LABEL, compareRecommended, isMobileDevice } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, AD_LABEL, compareRecommended, isDurationAbnormal, isMobileDevice } from '../utils/scanFormat';
 import { lockOrientation, unlockOrientation, type OrientationLock } from '../utils/orientation';
 import { SourcePickerModal } from '../components/SourcePickerModal';
 import { MetricBadges } from '../components/MetricBadges';
@@ -44,6 +44,7 @@ export const WatchView: React.FC = () => {
     getMovieById,
     loadMovieDetail,
     resolveResources,
+    restartResourceSearch,
     movieResources,
     currentEpisodes,
     selectMatch,
@@ -54,6 +55,7 @@ export const WatchView: React.FC = () => {
     probingSites,
     patchScan,
     patchResource,
+    confirmRestoredSource,
     navigateTo,
     goBack,
     recordWatchProgress,
@@ -70,6 +72,11 @@ export const WatchView: React.FC = () => {
   const episodes = activeLine?.episodes || [];
   const selectedMatch = resource?.selected;
   const scan = resource?.scan;
+  // 探测阶段已经按响应头/文件魔数识别过真实媒体类型；播放地址常把 MP4 藏在
+  // 无后缀签名 URL（甚至 filename=*.iso）里，不能只靠 URL 后缀猜播放引擎。
+  const activeProbeKind = scan?.results.find(
+    (r) => r.siteKey === selectedMatch?.siteKey && r.flag === activeLine?.flag
+  )?.metrics?.kind;
 
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
   const [playerLoading, setPlayerLoading] = useState(true);
@@ -77,6 +84,9 @@ export const WatchView: React.FC = () => {
   const [buffering, setBuffering] = useState(false);  // 视频流缓冲中（起播/卡顿/拖进度条）
   const [bufferedEnd, setBufferedEnd] = useState(0);  // 当前播放位置对应的缓冲区末端（秒）
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
+  const [researching, setResearching] = useState(false);
+  const [autoRecovering, setAutoRecovering] = useState(false);
+  const [recoveryPending, setRecoveryPending] = useState('');
   const [playNonce, setPlayNonce] = useState(0);      // 重试播放的触发器
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -88,6 +98,10 @@ export const WatchView: React.FC = () => {
   // 探测都会失败（App 端每次进详情都拿新 token 所以无感）。失败后重拉一次详情
   // 换新令牌自动重试；按站点+线路 30s 防抖，避免线路真挂了时无限刷新
   const tokenRefreshRef = useRef<{ key: string; t: number } | null>(null);
+  const failedSourceKeysRef = useRef<Set<string>>(new Set());
+  const recoveryBusyRef = useRef(false);
+  const freshRecoveryAttemptedRef = useRef(false);
+  const restoreConfirmedKeyRef = useRef('');
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const infoRef = useRef<HTMLElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
@@ -108,6 +122,7 @@ export const WatchView: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   // 移动端防误触锁定：锁定后拦截播放器全部交互（暂停/进度/音量/控制栏），仅解锁按钮可点
   const [controlsLocked, setControlsLocked] = useState(false);
+  const mobilePlayer = isMobileDevice();
 
   const favorited = movie ? isFavorite(movie.id) : false;
 
@@ -136,7 +151,7 @@ export const WatchView: React.FC = () => {
       const bySaved = saved?.episodeNumber ? episodes.find((e) => e.number === saved.episodeNumber) : undefined;
       return bySaved || episodes[0];
     });
-  }, [resource?.status, activeLine?.flag, episodes.length]);
+  }, [resource?.status, selectedMatch?.siteKey, activeLine?.flag, episodes.length, episodes[0]?.id]);
 
   // 资源就绪即触发智能选源扫描（AppContext 内部有去重与结果复用）
   useEffect(() => {
@@ -145,7 +160,21 @@ export const WatchView: React.FC = () => {
 
   // 扫描完成后的自动切源：当前源失败/有广告，或推荐源综合分领先 >0.15 才切换；
   // 用户手动选过源（userPicked）或已切过（switched）则不再动
-  const applySourceRef = useRef<(siteKey: string, flag: string | undefined, manual?: boolean) => void>(() => {});
+  const applySourceRef = useRef<(siteKey: string, flag: string | undefined, manual?: boolean) => Promise<boolean>>(
+    async () => false
+  );
+  const autoRecoverRef = useRef<(reason: string, markCurrent?: boolean) => Promise<boolean>>(
+    async () => false
+  );
+
+  useEffect(() => {
+    failedSourceKeysRef.current.clear();
+    recoveryBusyRef.current = false;
+    freshRecoveryAttemptedRef.current = false;
+    restoreConfirmedKeyRef.current = '';
+    setAutoRecovering(false);
+    setRecoveryPending('');
+  }, [movieId]);
 
   // 首次加载（awaitScan）：扫描中出现第一条可用线路就先播当前较优者；
   // 全部完成后由下方自动切源效果换到最优（provisional 标记临时线路）
@@ -155,7 +184,7 @@ export const WatchView: React.FC = () => {
     if (!ok.length && scan.status !== 'done') return; // 还没有可用线路，继续等
     let best: ScanCandidateResult | undefined;
     if (ok.length) {
-      best = ok.reduce((a, b) => (b.metrics!.scores.total > a.metrics!.scores.total ? b : a));
+      best = [...ok].sort(compareRecommended)[0];
       if (scan.status === 'done' && scan.recommendedKey) {
         const rec = scan.results.find((r) => scanResultKey(r) === scan.recommendedKey);
         if (rec && rec.status === 'ok' && rec.metrics && rec.flag) best = rec;
@@ -182,9 +211,15 @@ export const WatchView: React.FC = () => {
     const cur = scan.results.find((r) => r.siteKey === selectedMatch.siteKey && r.flag === activeLine.flag);
     let should = false;
     if (!cur || cur.status === 'fail' || !cur.metrics) should = true;
-    else if (cur.metrics.adLevel === 'dirty' && rec.metrics.adLevel !== 'dirty') should = true;
-    else if (resource?.provisional) should = rec.metrics.scores.total > cur.metrics.scores.total; // 临时线路：全部测完即换最优
-    else if (rec.metrics.scores.total - cur.metrics.scores.total > 0.15) should = true;
+    else {
+      const curDurationBad = isDurationAbnormal(cur.metrics);
+      const recDurationBad = isDurationAbnormal(rec.metrics);
+      // 时长分层优先于广告、清晰度、速度与综合分：正常线路绝不切到异常线路。
+      if (curDurationBad !== recDurationBad) should = curDurationBad && !recDurationBad;
+      else if (cur.metrics.adLevel === 'dirty' && rec.metrics.adLevel !== 'dirty') should = true;
+      else if (resource?.provisional) should = compareRecommended(rec, cur) < 0; // 临时线路：全部测完即换最优
+      else if (rec.metrics.scores.total - cur.metrics.scores.total > 0.15) should = true;
+    }
     if (!should) return;
     patchScan(movieId, { switched: true });
     if (resource?.provisional) patchResource(movieId, { provisional: false });
@@ -203,6 +238,39 @@ export const WatchView: React.FC = () => {
       hlsRef.current = null;
     }
   }, []);
+
+  const handleResearch = useCallback(async () => {
+    if (researching) return;
+    failedSourceKeysRef.current.clear();
+    freshRecoveryAttemptedRef.current = false;
+    recoveryBusyRef.current = true; // removeAttribute/load 可能触发 video.error，手动重搜期间禁止自动恢复抢跑
+    setAutoRecovering(false);
+    setRecoveryPending('');
+    setResearching(true);
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+    destroyHls();
+    resumeRef.current = 0;
+    setCurrentEpisode(null);
+    setIsPlaying(false);
+    setPlayerError('');
+    setPlayerLoading(true);
+    setBuffering(false);
+    setBufferedEnd(0);
+    setCurrentTime(0);
+    try {
+      await restartResourceSearch(movieId);
+    } catch {
+      // AppContext 已展示失败原因；保留空面板，避免旧线路重新出现。
+    } finally {
+      recoveryBusyRef.current = false;
+      setResearching(false);
+    }
+  }, [destroyHls, movieId, researching, restartResourceSearch]);
 
   // 首播门控（布尔值，只在"无可用线路 → 有可用线路"时翻转一次；
   // 不能直接依赖 scan 状态，否则扫描完成会触发播放器重载，把续播进度清掉）
@@ -237,15 +305,16 @@ export const WatchView: React.FC = () => {
         // 判定反转：只排除明确的文件直链（mp4/mkv 等），其余一律走 hls.js——大量线路入口是
         // php/无后缀地址（如 m3u8.meilinvps.com/m3u8/32641）302 到 CDN m3u8，后端按后缀
         // 误判 hls=false 后经 video.src 原生挂载，Chromium 不支持原生 HLS 会永远卡加载。
-        // 扩展名藏在 query 里的直链（网盘/对象存储签名 url 的 filename*=...mp4）也算文件：
+        // 扩展名藏在 query 里的直链（网盘/对象存储签名 URL 的 filename*=...mp4，
+        // 或实际为 MP4 却标成 filename*=...iso）也算文件：
         // 喂给 hls.js 会把整个文件当清单下载，永远进不了帧
-        const FILE_EXT_RE = /\.(mp4|mkv|flv|avi|mov|webm|m4s)(?=[?&#]|$)/i;
+        const FILE_EXT_RE = /\.(mp4|mkv|flv|avi|mov|webm|m4s|iso)(?=[?&#]|$)/i;
         const fileish = (u?: string) => {
           if (!u) return false;
           if (FILE_EXT_RE.test(u)) return true;
           try { return FILE_EXT_RE.test(decodeURIComponent(u)); } catch { return false; }
         };
-        const isFile = fileish(src) || fileish(res.url);
+        const isFile = activeProbeKind === 'file' || fileish(src) || fileish(res.url);
         // 起播看门狗：HEVC-TS 等播放器解不了的流，分片正常下载但 MSE 进不了帧，
         // readyState 永远停在 0 且不触发 hls.js fatal error；大文件直链走 /stream
         // 代理时 moov 在尾部、Range 回读也要时间，60s 无 metadata 才判死
@@ -255,7 +324,12 @@ export const WatchView: React.FC = () => {
             playbackWatchdogRef.current = null;
             if (cancelled || video.readyState > 0) return;
             setBuffering(false);
-            setPlayerError('该线路一直未能起播：可能是浏览器不支持的编码（如 4K 蓝光 HEVC 线），请更换线路');
+            const message = '该线路一直未能起播，正在自动更换线路';
+            void autoRecoverRef.current(message).then((recovered) => {
+              if (!recovered && !cancelled) {
+                setPlayerError('该线路一直未能起播：可能是浏览器不支持的编码，请手动更换线路');
+              }
+            });
           }, 60000);
         };
 
@@ -281,10 +355,12 @@ export const WatchView: React.FC = () => {
               return;
             }
             setBuffering(false);
-            // 编码能力不匹配（如 EAC3 音频/HEVC 视频无解码支持）给出针对性提示
-            setPlayerError(/BUFFER_CODEC/i.test(String(data.details))
-              ? '该线路音视频编码浏览器不支持，请更换线路'
-              : '视频加载失败，请重试或换个线路');
+            const message = /BUFFER_CODEC/i.test(String(data.details))
+              ? '该线路音视频编码不受支持'
+              : '该线路视频加载失败';
+            void autoRecoverRef.current(message).then((recovered) => {
+              if (!recovered && !cancelled) setPlayerError(`${message}，请手动更换线路`);
+            });
           });
           hlsRef.current = hls;
           armWatchdog();
@@ -310,18 +386,38 @@ export const WatchView: React.FC = () => {
             setPlayerLoading(true);
             try {
               const flags = await selectMatch(movieId, selectedMatch, false);
-              // 重拉会把激活线路重置回第一条：切回用户当前线路，集数按编号延续
-              const idx = flags?.findIndex((f) => f.flag === activeLine.flag) ?? -1;
-              if (idx > 0) selectFlag(movieId, idx, false);
+              if (flags?.length) {
+                // 重拉会把激活线路重置回第一条。原线路仍在则使用新的 episode token；
+                // 原线路消失则降级到同站第一条，并解除历史恢复锁定。
+                const idx = flags.findIndex((f) => f.flag === activeLine.flag);
+                const nextIndex = idx >= 0 ? idx : 0;
+                if (nextIndex > 0) selectFlag(movieId, nextIndex, false);
+                const nextFlag = flags[nextIndex];
+                const nextEpisode = nextFlag.episodes.find((ep) => ep.number === currentEpisode.number)
+                  || nextFlag.episodes[0];
+                if (nextEpisode) setCurrentEpisode(nextEpisode);
+                if (idx < 0) {
+                  failedSourceKeysRef.current.add(`${selectedMatch.siteKey}::${selectedMatch.vodId}::${activeLine.flag}`);
+                  patchResource(movieId, {
+                    restorePending: undefined, restoredPick: undefined, provisional: true,
+                  });
+                  showToast('原线路已下线，已切换该站其它线路继续播放', 'info');
+                }
+                if (!cancelled) setPlayerLoading(false);
+                return;
+              }
             } catch { /* 重拉失败走下面的错误展示 */ }
-            if (!cancelled) setPlayerLoading(false);
-            return;
           }
-          setPlayerError(
-            /设备未连接|device offline/i.test(msg)
-              ? '播放设备不在线，打开 App 后点击重试'
-              : msg
-          );
+          const recovered = /设备未连接|device offline/i.test(msg)
+            ? false
+            : await autoRecoverRef.current(msg);
+          if (!recovered) {
+            setPlayerError(
+              /设备未连接|device offline/i.test(msg)
+                ? '播放设备不在线，打开 App 后点击重试'
+                : msg
+            );
+          }
         }
       } finally {
         if (!cancelled) setPlayerLoading(false);
@@ -336,6 +432,15 @@ export const WatchView: React.FC = () => {
       }
     };
   }, [resource?.status, scanGateOpen, currentEpisode?.id, selectedMatch?.siteKey, activeLine?.flag, playNonce]);
+
+  // 未探测线路可能先因无后缀 URL 被误挂到 hls.js；探测稍后确认是文件时仅在尚未
+  // 起播的 HLS 实例上重试一次。已经按 .iso 等提示走原生播放时不重载，避免进度归零。
+  useEffect(() => {
+    const video = videoRef.current;
+    if (activeProbeKind !== 'file' || !hlsRef.current || !video || video.readyState > 0) return;
+    resumeRef.current = video.currentTime || resumeRef.current;
+    setPlayNonce((n) => n + 1);
+  }, [activeProbeKind]);
 
   useEffect(() => () => destroyHls(), [destroyHls]);
 
@@ -408,6 +513,20 @@ export const WatchView: React.FC = () => {
       videoRef.current.pause();
       setIsPlaying(false);
     }
+  };
+
+  // 移动端点击画面只切换控制栏显隐，播放/暂停只由明确的播放按钮触发。
+  const handlePlayerSurfaceClick = () => {
+    if (!mobilePlayer) {
+      handlePlayPause();
+      handleMouseMove();
+      return;
+    }
+    if (controlsTimeoutRef.current) {
+      window.clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = null;
+    }
+    setShowControls((visible) => !visible);
   };
 
   const handleTimeUpdate = () => {
@@ -518,6 +637,17 @@ export const WatchView: React.FC = () => {
     }
   };
 
+  // 系统手势或浏览器按钮也可能退出全屏，始终以真实全屏元素同步 UI 和外框样式。
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const fullscreen = document.fullscreenElement === playerContainerRef.current;
+      setIsFullscreen(fullscreen);
+      if (!document.fullscreenElement) unlockOrientation();
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
   // 全屏内切换横竖屏（仅移动端显示）
   const handleRotateOrientation = () => {
     const next: OrientationLock = orientation === 'landscape' ? 'portrait' : 'landscape';
@@ -556,7 +686,7 @@ export const WatchView: React.FC = () => {
   const flagResult = (flag: string) =>
     scan?.results.find((r) => r.siteKey === resource?.selected?.siteKey && !!r.flag && r.flag === flag);
 
-  // 推荐线路：清晰度优先排序（吞吐 <3Mb/s 的慢线靠后），最多 3 条；
+  // 推荐线路：时长异常绝对沉底，再按可播性/清晰度/速度排序，最多 3 条；
   // 不排除当前线路——它排进前 3 时在卡片右侧标记已选择
   const topLines = (scan?.results || [])
     .filter((r) => r.status === 'ok' && r.flag && r.metrics)
@@ -585,9 +715,10 @@ export const WatchView: React.FC = () => {
   }
   if (playerLoading && scanGateOpen && !playerError && resource?.status === 'ready')
     busyHints.push('正在解析播放地址…');
+  if (autoRecovering) busyHints.push('当前线路失效，正在自动寻找可用线路…');
 
-  const applySource = async (siteKey: string, flag: string | undefined, manual = true) => {
-    if (!resource) return;
+  const applySource = async (siteKey: string, flag: string | undefined, manual = true): Promise<boolean> => {
+    if (!resource) return false;
     // 同站点换线路：直接切 flag（探测只覆盖每站前 8 条，未探测到的线路走下面的重新拉详情）
     if (siteKey === resource.selected?.siteKey && flag !== undefined) {
       const idx = resource.flags.findIndex((f) => f.flag === flag);
@@ -595,20 +726,135 @@ export const WatchView: React.FC = () => {
         if (idx !== resource.activeFlagIndex) {
           const pos = videoRef.current?.currentTime || 0;
           if (pos > 5) resumeRef.current = pos;
+          patchResource(movieId, { restorePending: undefined, restoredPick: undefined });
           selectFlag(movieId, idx, manual);
         }
-        return;
+        return true;
       }
     }
     const match = resource.matches.find((m) => m.siteKey === siteKey);
-    if (!match) return;
+    if (!match) return false;
     const pos = videoRef.current?.currentTime || 0;
     if (pos > 5) resumeRef.current = pos;
     const flags = await selectMatch(movieId, match, manual);
+    if (!flags?.length) return false;
     const idx = flag ? (flags || []).findIndex((f) => f.flag === flag) : 0;
-    if (idx >= 0) selectFlag(movieId, idx, manual);
+    if (idx < 0) return false;
+    patchResource(movieId, { restorePending: undefined, restoredPick: undefined });
+    selectFlag(movieId, idx, manual);
+    return true;
   };
   applySourceRef.current = applySource;
+
+  // 播放失败自动自愈：按推荐顺序逐个验证已探测候选（单轮最多 4 条）；扫描尚未
+  // 产出候选则等待，候选耗尽后仅强制实时重搜一次，防止坏源造成无限循环。
+  const autoRecover = async (reason: string, markCurrent = true): Promise<boolean> => {
+    if (recoveryBusyRef.current || !resource) return recoveryBusyRef.current;
+    const selected = resource.selected;
+    const line = resource.flags[resource.activeFlagIndex] || resource.flags[0];
+    if (markCurrent && selected && line) {
+      failedSourceKeysRef.current.add(`${selected.siteKey}::${selected.vodId}::${line.flag}`);
+    }
+    const pos = videoRef.current?.currentTime || currentTime;
+    if (pos > 5) resumeRef.current = pos;
+    patchResource(movieId, { restorePending: undefined, restoredPick: undefined });
+    patchScan(movieId, { switched: true });
+    setPlayerError('');
+
+    const candidates = (scan?.results || [])
+      .filter((r) => r.status === 'ok' && r.flag && r.metrics)
+      .sort(compareRecommended)
+      .filter((r) => !failedSourceKeysRef.current.has(`${r.siteKey}::${r.vodId}::${r.flag}`))
+      .slice(0, 4);
+
+    if (candidates.length) {
+      recoveryBusyRef.current = true;
+      setAutoRecovering(true);
+      setRecoveryPending('');
+      try {
+        for (const candidate of candidates) {
+          const ok = await applySource(candidate.siteKey, candidate.flag, false);
+          if (ok) {
+            patchResource(movieId, { provisional: scan?.status === 'running' || undefined });
+            showToast(`当前线路失效，已自动切换：${candidate.siteName} · ${candidate.flag}`, 'info');
+            setPlayerLoading(true);
+            return true;
+          }
+          failedSourceKeysRef.current.add(`${candidate.siteKey}::${candidate.vodId}::${candidate.flag}`);
+        }
+      } finally {
+        recoveryBusyRef.current = false;
+      }
+    }
+
+    if (scan?.status === 'running') {
+      setRecoveryPending(reason || '当前线路失效');
+      setAutoRecovering(true);
+      return true;
+    }
+
+    if (!freshRecoveryAttemptedRef.current) {
+      freshRecoveryAttemptedRef.current = true;
+      recoveryBusyRef.current = true;
+      setAutoRecovering(true);
+      setRecoveryPending('');
+      showToast('缓存线路均已失效，正在从 App 实时重新搜索', 'info');
+      try {
+        await restartResourceSearch(movieId);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        recoveryBusyRef.current = false;
+        setAutoRecovering(false);
+      }
+    }
+
+    setAutoRecovering(false);
+    setRecoveryPending('');
+    return false;
+  };
+  autoRecoverRef.current = autoRecover;
+
+  // 缓存详情在进入播放页时已全部失效：不等用户操作，立即走第三级恢复。
+  useEffect(() => {
+    if (!resource?.needsFreshSearch || freshRecoveryAttemptedRef.current) return;
+    void autoRecoverRef.current(resource.error || '缓存来源失效', false);
+  }, [resource?.needsFreshSearch, resource?.error, movieId]);
+
+  // 当前坏线失败得早、扫描结果来得晚时，随着结果渐进到达继续自动挑下一条。
+  useEffect(() => {
+    if (!recoveryPending) return;
+    void autoRecoverRef.current(recoveryPending, false).then((recovered) => {
+      if (!recovered) setPlayerError(`${recoveryPending}，且未找到其它可用线路`);
+    });
+  }, [recoveryPending, scan?.finished, scan?.status]);
+
+  const handlePlaying = () => {
+    setIsPlaying(true);
+    setBuffering(false);
+    setAutoRecovering(false);
+    setRecoveryPending('');
+    const selected = resource?.selected;
+    if (selected && activeLine) {
+      failedSourceKeysRef.current.delete(`${selected.siteKey}::${selected.vodId}::${activeLine.flag}`);
+      const restoreKey = `${selected.siteKey}::${selected.vodId}::${activeLine.flag}`;
+      if (resource?.restorePending && restoreConfirmedKeyRef.current !== restoreKey) {
+        restoreConfirmedKeyRef.current = restoreKey;
+        confirmRestoredSource(movieId);
+        showToast('已恢复上次观看的来源和线路', 'info');
+      }
+    }
+  };
+
+  const handleVideoError = () => {
+    const video = videoRef.current;
+    if (!video?.currentSrc || recoveryBusyRef.current) return;
+    const message = video.error?.message || '该线路媒体加载失败';
+    void autoRecoverRef.current(message).then((recovered) => {
+      if (!recovered) setPlayerError(`${message}，请手动更换线路`);
+    });
+  };
 
   // Keyboard controls
   useEffect(() => {
@@ -750,6 +996,14 @@ export const WatchView: React.FC = () => {
         </div>
       );
     }
+    if (autoRecovering) {
+      return (
+        <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <Loader2 className="w-12 h-12 text-emerald-400 animate-spin" />
+          <p className="text-sm text-zinc-300">当前线路失效，正在自动寻找可用线路...</p>
+        </div>
+      );
+    }
     if (playerLoading) {
       return (
         <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3">
@@ -780,7 +1034,7 @@ export const WatchView: React.FC = () => {
         </div>
       );
     }
-    if (!isPlaying && !buffering) {
+    if (!mobilePlayer && !isPlaying && !buffering) {
       return (
         <div
           onClick={handlePlayPause}
@@ -829,24 +1083,31 @@ export const WatchView: React.FC = () => {
           {/* Custom HTML5 Video Player Container */}
           <div
             ref={playerContainerRef}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={() => isPlaying && setShowControls(false)}
+            onMouseMove={mobilePlayer ? undefined : handleMouseMove}
+            onMouseLeave={mobilePlayer ? undefined : () => isPlaying && setShowControls(false)}
             id="cine-video-player"
-            className="relative w-full lg:flex-1 lg:min-w-0 aspect-video rounded-3xl overflow-hidden bg-black border border-zinc-800/80 shadow-2xl group select-none"
+            className={`relative w-full lg:flex-1 lg:min-w-0 aspect-video overflow-hidden bg-black group select-none ${
+              mobilePlayer && isFullscreen
+                ? 'rounded-none border-0 shadow-none'
+                : 'rounded-3xl border border-zinc-800/80 shadow-2xl'
+            }`}
             style={{
-              boxShadow: 'rgba(0, 0, 0, 0.8) 0px 30px 60px -12px, rgba(16, 185, 129, 0.2) 0px 0px 0px 1px',
+              boxShadow: mobilePlayer && isFullscreen
+                ? 'none'
+                : 'rgba(0, 0, 0, 0.8) 0px 30px 60px -12px, rgba(16, 185, 129, 0.2) 0px 0px 0px 1px',
             }}
           >
             {/* HTML5 Video Element（源由播放地址解析后挂载） */}
             <video
               ref={videoRef}
               poster={movie.backdrop || movie.cover}
-              onClick={() => { handlePlayPause(); handleMouseMove(); }}
+              onClick={handlePlayerSurfaceClick}
               onTimeUpdate={handleTimeUpdate}
               onProgress={handleProgress}
               onLoadedMetadata={handleLoadedMetadata}
+              onError={handleVideoError}
               onWaiting={() => setBuffering(true)}
-              onPlaying={() => { setIsPlaying(true); setBuffering(false); }}
+              onPlaying={handlePlaying}
               onCanPlay={() => setBuffering(false)}
               onPause={() => setIsPlaying(false)}
               onSeeking={() => setBuffering(true)}
@@ -859,9 +1120,9 @@ export const WatchView: React.FC = () => {
             {/* Dynamic status overlays */}
             {renderPlayerOverlay()}
 
-            {/* 移动端防误触锁定：右侧垂直居中，随控制栏显隐（点播放器唤醒、几秒自动淡出）；
-                锁定后覆盖层拦截一切交互，仅此按钮可点（隐藏时点屏幕唤醒） */}
-            {isMobileDevice() && (
+            {/* 移动端防误触锁定：右侧垂直居中，并与控制栏一起由播放器点击切换显隐；
+                锁定后覆盖层拦截其它交互，仅解锁按钮仍可点击。 */}
+            {mobilePlayer && (
               <button
                 onClick={() => setControlsLocked((v) => !v)}
                 title={controlsLocked ? '解锁播放器操作' : '锁定播放器操作'}
@@ -877,8 +1138,7 @@ export const WatchView: React.FC = () => {
             {controlsLocked && (
               <div
                 className="absolute inset-0 z-40"
-                onClick={handleMouseMove}
-                onMouseMove={handleMouseMove}
+                onClick={handlePlayerSurfaceClick}
               />
             )}
 
@@ -1116,7 +1376,11 @@ export const WatchView: React.FC = () => {
                 className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 rounded-2xl border border-zinc-700/80 bg-zinc-800/60 hover:bg-zinc-700/60 hover:border-zinc-600 px-4 py-3 transition-colors text-left"
               >
                 <span className="min-w-0 block text-sm font-bold text-zinc-100 truncate">
-                  {selectedMatch?.siteName}{activeLine?.flag ? ` · ${activeLine.flag}` : ' 选择线路'}
+                  {selectedMatch
+                    ? `${selectedMatch.siteName}${activeLine?.flag ? ` · ${activeLine.flag}` : ' 选择线路'}`
+                    : resource?.matches?.length
+                      ? `已找到 ${resource.matches.length} 个来源，点击查看`
+                      : '正在搜索来源…'}
                 </span>
                 <span className="flex items-center gap-2.5 shrink-0 sm:justify-end">
                   {(() => {
@@ -1271,7 +1535,7 @@ export const WatchView: React.FC = () => {
           </div>
       </div>
 
-      {/* 选源弹窗：全部站点线路分组展示，未探测站点可单站懒补测，已探测站点可强制重探 */}
+      {/* 选源弹窗：未探测站点可批量/单站补测，推荐分组可批量重探 */}
       <SourcePickerModal
         open={sourceModalOpen}
         onClose={() => setSourceModalOpen(false)}
@@ -1280,10 +1544,18 @@ export const WatchView: React.FC = () => {
         isFeature={movie.type === 'movie' || movie.type === 'doc'}
         selectedSiteKey={selectedMatch?.siteKey}
         selectedFlag={activeLine?.flag}
+        researching={researching}
+        onResearch={handleResearch}
         probingSites={probingSites}
         onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
-        onReprobeAll={() => {
-          const keys = [...new Set((scan?.results || []).map((r) => r.siteKey))];
+        onProbeAllUnprobed={() => {
+          const probed = new Set((scan?.results || []).map((r) => r.siteKey));
+          const keys = [...new Set((resource?.matches || [])
+            .map((m) => m.siteKey)
+            .filter((key) => !probed.has(key)))];
+          if (keys.length) reprobeSites(movieId, keys);
+        }}
+        onReprobeRecommended={(keys) => {
           if (keys.length) reprobeSites(movieId, keys);
         }}
         onReprobeSite={(siteKey) => reprobeSites(movieId, [siteKey])}

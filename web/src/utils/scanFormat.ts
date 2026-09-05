@@ -42,19 +42,25 @@ export interface RankableMetrics {
   codec?: string;
   acodec?: string;
   moovEnd?: boolean;   // MP4 索引在文件尾（非 faststart）：仅移动端浏览器起播极慢
-  durationMatch?: 'short' | 'ok' | 'long';  // short=疑似预告片/假资源：再高清也要沉底
+  durationMatch?: 'short' | 'ok' | 'long';
   scores: { total: number };
 }
 
-/** 推荐线路比较器：不可播编码/慢线/预告片线靠后（移动端另把 moov 在尾的大 MP4 沉底）→ 清晰度降序 → 同清晰度按综合评分（缺 metrics 排最后）。
- *  时长短的线路后端已做 ×0.4 重罚，但清晰度优先排序下 4K 宣传片仍会压过 1080P 正片——
- *  必须显式沉底（玩具总动员5 推荐前二全是十几秒宣传片实例） */
+/** 时长明显偏短/偏长均视为异常；异常线路必须排在所有正常线路之后。 */
+export const isDurationAbnormal = (metrics?: Pick<RankableMetrics, 'durationMatch'>) =>
+  metrics?.durationMatch === 'short' || metrics?.durationMatch === 'long';
+
+/** 推荐线路比较器：先按时长正常/异常做绝对分层，再比较可播性、速度、清晰度与综合评分。
+ *  因此异常线路无论多清晰、多快，都不可能越过任意正常时长线路。 */
 export function compareRecommended<T extends { metrics?: RankableMetrics }>(a: T, b: T): number {
   const m = a.metrics, n = b.metrics;
   if (!m || !n) return m ? -1 : n ? 1 : 0;
+  const aDurationBad = isDurationAbnormal(m);
+  const bDurationBad = isDurationAbnormal(n);
+  if (aDurationBad !== bDurationBad) return aDurationBad ? 1 : -1;
   const mobile = isMobileDevice();
-  const aBad = isUnsupportedCodec(m.codec) || (mobile && m.moovEnd) || (m.throughputMbps ?? 0) < SLOW_LINE_MBPS || m.durationMatch === 'short';
-  const bBad = isUnsupportedCodec(n.codec) || (mobile && n.moovEnd) || (n.throughputMbps ?? 0) < SLOW_LINE_MBPS || n.durationMatch === 'short';
+  const aBad = isUnsupportedCodec(m.codec) || (mobile && m.moovEnd) || (m.throughputMbps ?? 0) < SLOW_LINE_MBPS;
+  const bBad = isUnsupportedCodec(n.codec) || (mobile && n.moovEnd) || (n.throughputMbps ?? 0) < SLOW_LINE_MBPS;
   if (aBad !== bBad) return aBad ? 1 : -1;
   const dh = (n.height ?? 0) - (m.height ?? 0);
   if (dh !== 0) return dh;

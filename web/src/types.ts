@@ -55,6 +55,7 @@ export interface WatchHistoryItem {
   progressPercent: number;
   lastWatchedAt: number; // timestamp
   siteKey?: string;      // 最后选择的来源站点（重新进入时优先恢复）
+  vodId?: string;        // 上次命中的站内资源 ID（仅用于校验，不作为永久锁定）
   flag?: string;         // 最后选择的线路
 }
 
@@ -216,9 +217,11 @@ export interface ResourceState {
   error?: string;
   scan?: ScanState;              // 智能选源扫描（进入播放页自动触发）
   restoredPick?: boolean;        // 已从历史恢复用户上次的站点/线路，扫描不再自动切源
+  restorePending?: boolean;      // 历史站点/资源/线路均精确命中，等待真正起播后再确认恢复
   awaitScan?: boolean;           // 首次加载且无历史偏好：等扫描出现可用线路再起播
   provisional?: boolean;         // 起播用的是扫描中的临时较优线路，全部完成后自动切最优
   searchEnded?: boolean;         // 聚合搜索 SSE 已结束（matches 已齐；冷搜渐进合并时扫描可能只覆盖了部分站点）
+  needsFreshSearch?: boolean;    // 缓存候选详情全部失效，需要自动清缓存并实时重搜
 }
 
 // ---------------- 智能选源（线路测速/清晰度/广告探测） ----------------

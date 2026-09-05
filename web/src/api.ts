@@ -69,8 +69,10 @@ export const api = {
       `/api/resource/search?wd=${encodeURIComponent(wd)}`
     ),
   // SSE 逐站推送版聚合搜索：done/error 后自动断开；连接中断回调一个合成 error 事件并关闭
-  resourceSearchStream: (wd: string, onEvent: (ev: SearchStreamEvent) => void): EventSource => {
-    const es = new EventSource(`/api/resource/search/stream?wd=${encodeURIComponent(wd)}`);
+  resourceSearchStream: (wd: string, onEvent: (ev: SearchStreamEvent) => void, preferredSiteKey = '', fresh = false): EventSource => {
+    const preferred = preferredSiteKey ? `&preferred=${encodeURIComponent(preferredSiteKey)}` : '';
+    const forceFresh = fresh ? '&fresh=true' : '';
+    const es = new EventSource(`/api/resource/search/stream?wd=${encodeURIComponent(wd)}${preferred}${forceFresh}`);
     es.onmessage = (evt) => {
       let ev: SearchStreamEvent;
       try {
@@ -90,6 +92,16 @@ export const api = {
     };
     return es;
   },
+  resetResourceSearch: (movieId: string, wd: string) =>
+    request<{ ok: boolean }>('/api/resource/search/reset', {
+      method: 'POST',
+      body: JSON.stringify({ movieId, wd }),
+    }),
+  invalidateResourceCandidate: (wd: string, siteKey: string, vodId: string) =>
+    request<{ ok: boolean; removed: boolean }>('/api/resource/search/invalidate', {
+      method: 'POST',
+      body: JSON.stringify({ wd, siteKey, vodId }),
+    }),
   resourceAdopt: (key: string, id: string) =>
     request<{ ok: boolean; movie: MovieItem | null; error?: string }>('/api/resource/adopt', {
       method: 'POST',

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from database import get_conn
 import database
-from bridge import active_device, call_device
+from bridge import active_device, call_device, stream_device_events
 from catalog import upsert_subject, get_subject, row_to_item, TMDB_PROXY, upgrade_douban_img
 from probe import start_scan, get_scan, SCAN_SITES_CAP
 from liveprobe import (start_live_scan as liveprobe_start_scan, get_live_scan,
@@ -36,7 +36,8 @@ SESSION_DAYS = 30
 PBKDF2_ITERS = 120_000
 SITES_TTL = 600  # 站点列表缓存 10 分钟
 SEARCH_TIMEOUT = 20.0
-SEARCH_CONCURRENCY = 6
+# 仅用于兼容不支持 searchAll 的旧 App；新版由 App 的 largeExecutor 自己控制并发。
+SEARCH_CONCURRENCY = 20
 SEARCH_CACHE_TTL = 2 * 3600  # 聚合搜索命中缓存 2 小时，过期后前台重新实时搜索
 SEARCH_RECHECK = 3600        # 缓存命中超过 1 小时未校验时，先回缓存、后台重搜比对（SWR）
 
@@ -265,6 +266,7 @@ async def history_list(request: Request):
             "progressPercent": min(100, round(watched / total * 100)) if total > 0 else 0,
             "lastWatchedAt": ts,
             "siteKey": r["site_key"] or "",
+            "vodId": r["vod_id"] or "",
             "flag": r["flag"] or "",
         })
     return {"list": items}
@@ -281,6 +283,7 @@ class HistoryBody(BaseModel):
     watchedSeconds: float = 0
     totalSeconds: float = 0
     siteKey: str = ""   # 最后选择的来源站点（重新进入时优先恢复）
+    vodId: str = ""     # 上次命中的站内资源 ID（用于识别缓存是否仍指向同一资源）
     flag: str = ""      # 最后选择的线路
 
 
@@ -293,17 +296,18 @@ async def history_upsert(request: Request, body: HistoryBody):
     now = datetime.now().isoformat()
     conn.execute("""
         INSERT INTO history (user_id, subject_id, title, cover, backdrop, episode_id, episode_title,
-            episode_number, watched_seconds, total_seconds, site_key, flag, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            episode_number, watched_seconds, total_seconds, site_key, vod_id, flag, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, subject_id) DO UPDATE SET
             title=excluded.title, cover=excluded.cover, backdrop=excluded.backdrop,
             episode_id=excluded.episode_id, episode_title=excluded.episode_title,
             episode_number=excluded.episode_number, watched_seconds=excluded.watched_seconds,
-            total_seconds=excluded.total_seconds, site_key=excluded.site_key, flag=excluded.flag,
+            total_seconds=excluded.total_seconds, site_key=excluded.site_key, vod_id=excluded.vod_id,
+            flag=excluded.flag,
             updated_at=excluded.updated_at
     """, (user["id"], body.movieId, body.movieTitle, body.cover, body.backdrop, body.episodeId,
-          body.episodeTitle, body.episodeNumber, body.watchedSeconds, body.totalSeconds,
-          body.siteKey, body.flag, now))
+           body.episodeTitle, body.episodeNumber, body.watchedSeconds, body.totalSeconds,
+           body.siteKey, body.vodId, body.flag, now))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -368,7 +372,7 @@ async def _searchable_sites() -> list[dict]:
 async def _search_one(site: dict, wd: str, sem: asyncio.Semaphore) -> tuple[dict, list]:
     async with sem:
         try:
-            data = await call_device("search", {"key": site.get("key", ""), "wd": wd},
+            data = await call_device("search", {"key": site.get("key", ""), "wd": wd, "quick": False},
                                      timeout=SEARCH_TIMEOUT)
             return site, data.get("list") or []
         except Exception:
@@ -395,13 +399,16 @@ def _site_matches(site: dict, wd: str, vods: list) -> list[dict]:
     return matched
 
 
-async def _live_search_events(wd: str):
+async def _legacy_search_events(wd: str, preferred: str = ""):
     """逐站实时搜索事件流：meta(站点总数) → site*(每站完成即出，无命中也发空列表供进度计数) → done。
     站点列表获取失败抛 RuntimeError，由消费方转成设备错误。"""
     sites = await _searchable_sites()
     database.record_search_sites(sites)
     disabled = database.get_disabled_site_keys()
     sites = [s for s in sites if s.get("key", "") not in disabled]
+    if preferred:
+        # 历史/预设来源先进入首批并发，前端无需为了恢复来源长时间等待整条队列。
+        sites.sort(key=lambda s: s.get("key", "") != preferred)
     yield {"type": "meta", "sites": len(sites)}
     sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
     tasks = [asyncio.ensure_future(_search_one(s, wd, sem)) for s in sites]
@@ -416,6 +423,44 @@ async def _live_search_events(wd: str):
         for t in tasks:
             if not t.done():
                 t.cancel()
+
+
+async def _live_search_events(wd: str, preferred: str = ""):
+    """一次启动 App 端批量搜索，逐站接收结果；旧版 App 自动回退逐站命令。"""
+    params = {
+        "wd": wd,
+        # 与 App 搜索栏一致：完整搜索全部 searchable 站点，不受 quickSearch 开关限制。
+        "quick": False,
+        "preferred": preferred,
+        "disabled": sorted(database.get_disabled_site_keys()),
+    }
+    try:
+        async for msg in stream_device_events("searchAll", params):
+            event_type = msg.get("type")
+            if event_type == "meta":
+                available = msg.get("availableSites") or []
+                database.record_search_sites(available)
+                yield {"type": "meta", "sites": int(msg.get("sites") or 0)}
+            elif event_type == "site":
+                site = {
+                    "key": msg.get("siteKey", ""),
+                    "name": msg.get("siteName", ""),
+                }
+                vods = (msg.get("data") or {}).get("list") or []
+                yield {
+                    "type": "site",
+                    "siteKey": site["key"],
+                    "siteName": site["name"],
+                    "matched": _site_matches(site, wd, vods),
+                }
+            elif event_type == "done":
+                yield {"type": "done", "searched": int(msg.get("searched") or 0)}
+    except RuntimeError as e:
+        # 灰度发布时服务端可能先于 App 升级；旧 App 不认识 searchAll，保持原链路可用。
+        if "unknown action searchAll" not in str(e):
+            raise
+        async for event in _legacy_search_events(wd, preferred):
+            yield event
 
 
 async def _do_live_search(wd: str) -> dict:
@@ -502,7 +547,7 @@ async def resource_search(wd: str, year: str = ""):
 
 
 @router.get("/api/resource/search/stream")
-async def resource_search_stream(wd: str):
+async def resource_search_stream(wd: str, preferred: str = "", fresh: bool = False):
     """SSE 逐站推送聚合搜索：站点完成一个推一个，前台无需等全部聚齐。
     缓存命中一次性下发（SWR 后台重搜同 JSON 接口）；实时搜索流结束后按同口径回填缓存。"""
     async def gen():
@@ -516,7 +561,7 @@ async def resource_search_stream(wd: str):
             return
         key = _norm_wd(wd)
         now = time.time()
-        cached = database.get_search_cache(dev.id, key)
+        cached = None if fresh else database.get_search_cache(dev.id, key)
         if cached and now - cached["created_at"] < SEARCH_CACHE_TTL:
             if now - max(cached["created_at"], cached["last_checked"]) >= SEARCH_RECHECK:
                 _kick_revalidate(dev.id, key)
@@ -530,7 +575,7 @@ async def resource_search_stream(wd: str):
             return
         matched, searched = [], 0
         try:
-            async for ev in _live_search_events(wd):
+            async for ev in _live_search_events(wd, preferred):
                 if ev["type"] == "site":
                     matched.extend(ev["matched"])
                 elif ev["type"] == "done":
@@ -549,6 +594,64 @@ async def resource_search_stream(wd: str):
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+class ResourceSearchResetBody(BaseModel):
+    movieId: str = ""
+    wd: str
+
+
+class ResourceSearchInvalidateBody(BaseModel):
+    wd: str
+    siteKey: str
+    vodId: str
+
+
+def _remove_cached_candidate(payload: str, site_key: str, vod_id: str) -> tuple[str, bool]:
+    """从聚合搜索缓存中精确剔除已确认失效的站点资源，保留其它候选与搜索统计。"""
+    data = json.loads(payload)
+    old = data.get("results") or []
+    kept = [m for m in old if not (m.get("siteKey") == site_key and m.get("vodId") == vod_id)]
+    data["results"] = kept
+    return json.dumps(data, ensure_ascii=False), len(kept) != len(old)
+
+
+@router.post("/api/resource/search/invalidate")
+async def resource_search_invalidate(body: ResourceSearchInvalidateBody):
+    """详情已无线路时定点失效缓存候选，避免下一次继续命中同一坏 vodId。"""
+    dev = active_device()
+    if dev is None:
+        return {"ok": True, "removed": False}
+    key = _norm_wd(body.wd)
+    cached = database.get_search_cache(dev.id, key)
+    if cached is None:
+        return {"ok": True, "removed": False}
+    payload, removed = _remove_cached_candidate(cached["results"], body.siteKey, body.vodId)
+    if removed:
+        database.set_search_cache(dev.id, key, cached["orig"] or body.wd, payload,
+                                  cached["created_at"], cached["last_checked"])
+    return {"ok": True, "removed": removed}
+
+
+@router.post("/api/resource/search/reset")
+async def resource_search_reset(request: Request, body: ResourceSearchResetBody):
+    """清掉当前影片的搜索缓存和历史来源偏好，下一次搜索必须从 App 重新获取。"""
+    dev = active_device()
+    if dev is not None:
+        database.delete_search_cache(dev.id, _norm_wd(body.wd))
+
+    # 未登录用户也允许重搜；只有存在有效会话时才清理该用户历史中的站点/线路，
+    # 观看进度、集数等历史信息继续保留。
+    user = _current_user(request)
+    if user is not None and body.movieId:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE history SET site_key = '', vod_id = '', flag = '' WHERE user_id = ? AND subject_id = ?",
+            (user["id"], body.movieId),
+        )
+        conn.commit()
+        conn.close()
+    return {"ok": True}
 
 
 class AdoptBody(BaseModel):
