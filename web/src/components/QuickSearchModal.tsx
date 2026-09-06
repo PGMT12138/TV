@@ -33,7 +33,7 @@ export const QuickSearchModal: React.FC = () => {
   }, [searchModalOpen, setSearchModalOpen]);
 
   // 手动搜索：点弹窗内搜索按钮才触发远程检索（豆瓣/TMDB 合并进片库）；
-  // 只有片库命中的词才静默预热 6h 资源缓存，未命中不触发设备端站点聚合搜索
+  // 此处只检索影片资料，进入播放页后再搜索站点资源。
   const runSearch = () => {
     const wd = query.trim();
     if (!wd) return;
@@ -42,7 +42,6 @@ export const QuickSearchModal: React.FC = () => {
       .then(({ list }) => {
         if (list.length) {
           mergeMovies(list);
-          api.resourceSearch(wd).catch(() => {}); // 预热与展示无关，静默失败
         }
       })
       .catch(() => { /* 豆瓣不可达时本地过滤仍可用 */ })

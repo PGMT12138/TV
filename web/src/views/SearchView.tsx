@@ -44,8 +44,7 @@ export const SearchView: React.FC = () => {
   const query = filterState.query.trim();
 
   // 手动搜索：点按钮/回车才触发远程检索（豆瓣/TMDB 片库）。
-  // 只有片库命中的词才静默预热服务端 6h 资源缓存（进播放页秒回）；
-  // 片库没有的词不触发设备端站点聚合搜索，避免每次搜索都压设备爬虫。
+  // 此处只检索影片资料，进入播放页后再搜索站点资源。
   const runSearch = (term: string) => {
     const wd = term.trim();
     if (!wd) return;
@@ -56,7 +55,6 @@ export const SearchView: React.FC = () => {
         if (seq !== seqRef.current) return;
         if (list.length) {
           mergeMovies(list);
-          api.resourceSearch(wd).catch(() => {}); // 预热与展示无关，静默失败
         }
       })
       .catch(() => { /* 忽略：豆瓣不可达时本地过滤仍可用 */ })

@@ -4,7 +4,7 @@
 import React from 'react';
 import { Gauge, MonitorPlay, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle } from 'lucide-react';
 import type { ScanMetrics } from '../types';
-import { fmtSpeed, fmtRes, isUnsupportedCodec, isMobileDevice } from '../utils/scanFormat';
+import { fmtSpeed, fmtRes, isUnsupportedCodec, isMobileDevice, isUnderTenMinutes } from '../utils/scanFormat';
 
 type BadgeMetrics = Partial<ScanMetrics>;
 
@@ -63,16 +63,16 @@ export const MetricBadges: React.FC<{
             <AdIcon className={ic} />
             {ad.label}
           </span>
-          {metrics.durationMatch === 'short' && (
+          {(isUnderTenMinutes(metrics.durationS) || metrics.durationMatch === 'short') && (
             <span
               className={`${pill} bg-rose-500/15 text-rose-300 border-rose-500/40`}
-              title={`时长异常：该片源仅 ${durMin} 分钟，远短于片库片长，疑似预告片或假资源`}
+              title={isUnderTenMinutes(metrics.durationS) ? '时长异常：该线路不足十分钟' : `时长异常：该片源仅 ${durMin} 分钟，远短于片库片长，疑似预告片或假资源`}
             >
               <Clock className={ic} />
-              仅{durMin}分钟
+              {isUnderTenMinutes(metrics.durationS) ? '不足10分钟' : `仅${durMin}分钟`}
             </span>
           )}
-          {metrics.durationMatch === 'long' && (
+          {!isUnderTenMinutes(metrics.durationS) && metrics.durationMatch === 'long' && (
             <span
               className={`${pill} bg-amber-500/15 text-amber-300 border-amber-500/40`}
               title={`时长异常：比片库片长约多 ${deltaMin} 分钟，疑似拼接了广告内容`}

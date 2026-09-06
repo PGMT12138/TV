@@ -32,6 +32,7 @@ class SearchEventMappingTest(unittest.IsolatedAsyncioTestCase):
             patch.object(cine, "stream_device_events", app_events),
             patch.object(cine.database, "get_disabled_site_keys", return_value={"disabled"}),
             patch.object(cine.database, "record_search_sites", side_effect=recorded.append),
+            patch.object(cine.database, "record_search_site_result"),
         ):
             events = [event async for event in cine._live_search_events("星际穿越", "demo")]
 

@@ -2,6 +2,8 @@
 import sqlite3
 import os
 import time
+import math
+import re
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "urls.db")
@@ -231,6 +233,35 @@ def init_db():
             disabled INTEGER DEFAULT 0
         )
     """)
+    # 老 search_count 只是站点登记次数，不能用于成功率分母；新统计从实际完成事件累积。
+    search_columns = {row["name"] for row in conn.execute("PRAGMA table_info(search_sites)")}
+    for column, definition in {
+        "completed_count": "INTEGER NOT NULL DEFAULT 0",
+        "success_count": "INTEGER NOT NULL DEFAULT 0",
+        "probe_count": "INTEGER NOT NULL DEFAULT 0",
+        "total_probe_duration_ms": "REAL NOT NULL DEFAULT 0",
+    }.items():
+        if column not in search_columns:
+            conn.execute(f"ALTER TABLE search_sites ADD COLUMN {column} {definition}")
+
+    # 线路名只在所属站点内唯一；跨影片累计，不能把不同站点的同名线路合并。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS line_probe_stats (
+            site_key TEXT NOT NULL,
+            flag TEXT NOT NULL,
+            probe_count INTEGER NOT NULL DEFAULT 0,
+            total_duration_ms REAL NOT NULL DEFAULT 0,
+            last_duration_ms REAL NOT NULL,
+            last_probed_at REAL NOT NULL,
+            PRIMARY KEY (site_key, flag)
+        )
+    """)
+    # 历史耗时样本没有保存成功结果，使用独立分母，不能把它们视为探测失败。
+    line_columns = {row["name"] for row in conn.execute("PRAGMA table_info(line_probe_stats)")}
+    for column in ("result_count", "success_count"):
+        if column not in line_columns:
+            conn.execute(f"ALTER TABLE line_probe_stats ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
+
     # 直播频道收藏：按 (live, group, channel) 定位一个频道，line 记住上次选择的线路
     conn.execute("""
         CREATE TABLE IF NOT EXISTS live_favorites (
@@ -302,8 +333,28 @@ def get_search_cache(device_id: str, wd: str) -> dict | None:
     return dict(row) if row else None
 
 
-def set_search_cache(device_id: str, wd: str, orig: str, payload: str, created_at: float, last_checked: float):
+def get_search_cache_generation() -> int:
+    return int(get_setting("search_cache_generation") or 0)
+
+
+def _clear_all_search_cache(conn):
+    """随源开关在同一事务清空所有设备、影片的缓存，并使在途搜索失去回填资格。"""
+    conn.execute("DELETE FROM search_cache")
+    conn.execute("INSERT INTO settings (key, value) VALUES ('search_cache_generation', '1') "
+                 "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1")
+
+
+def set_search_cache(device_id: str, wd: str, orig: str, payload: str, created_at: float, last_checked: float,
+                     generation: int | None = None):
     conn = get_conn()
+    # 校验与写入共用写事务，避免另一个服务进程在两者之间清空缓存。
+    conn.execute("BEGIN IMMEDIATE")
+    if generation is not None:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'search_cache_generation'").fetchone()
+        if generation != (int(row["value"]) if row else 0):
+            conn.rollback()
+            conn.close()
+            return
     conn.execute("INSERT OR REPLACE INTO search_cache (device_id, wd, orig, results, created_at, last_checked) "
                  "VALUES (?, ?, ?, ?, ?, ?)", (device_id, wd, orig, payload, created_at, last_checked))
     conn.commit()
@@ -388,6 +439,10 @@ def update_url(row_id: int, name: str = None, url: str = None, sort: int = None,
         raise ValueError("No fields to update")
     params.append(row_id)
     conn.execute(f"UPDATE urls SET {', '.join(sets)} WHERE id = ?", params)
+    if enabled is False:
+        source = conn.execute("SELECT type FROM urls WHERE id = ?", (row_id,)).fetchone()
+        if source is not None and source["type"] == 0:
+            _clear_all_search_cache(conn)
     conn.commit()
     row = conn.execute("SELECT id, name, url, sort, enabled, created_at FROM urls WHERE id = ?", (row_id,)).fetchone()
     conn.close()
@@ -579,29 +634,113 @@ def set_setting(key: str, value: str) -> None:
 
 
 def record_search_sites(sites: list[dict]) -> None:
-    """聚合搜索时登记参与站点：新站点插入，老站点更新名称并累加搜索次数。"""
+    """登记可用站点及名称；列表包含禁用站点，不能据此累加搜索统计。"""
     if not sites:
         return
-    now = datetime.now().isoformat()
     conn = get_conn()
     conn.executemany("""
-        INSERT INTO search_sites (site_key, site_name, search_count, last_searched_at, disabled)
-        VALUES (?, ?, 1, ?, 0)
-        ON CONFLICT(site_key) DO UPDATE SET site_name = excluded.site_name,
-            search_count = search_count + 1, last_searched_at = excluded.last_searched_at
-    """, [(s.get("key", ""), s.get("name", ""), now) for s in sites])
+        INSERT INTO search_sites (site_key, site_name)
+        VALUES (?, ?)
+        ON CONFLICT(site_key) DO UPDATE SET site_name = excluded.site_name
+    """, [(s["key"], s.get("name", "")) for s in sites if s.get("key")])
     conn.commit()
     conn.close()
+
+
+def record_search_site_result(site: dict, success: bool) -> None:
+    """只统计已完成的实时单站搜索命中率，与线路探测统计独立。"""
+    key = site.get("key", "")
+    if not key:
+        return
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO search_sites (site_key, site_name, last_searched_at,
+                                  completed_count, success_count)
+        VALUES (?, ?, ?, 1, ?)
+        ON CONFLICT(site_key) DO UPDATE SET
+            site_name = CASE WHEN excluded.site_name != '' THEN excluded.site_name ELSE site_name END,
+            last_searched_at = excluded.last_searched_at,
+            completed_count = completed_count + 1,
+            success_count = success_count + excluded.success_count
+    """, (key, site.get("name", ""), datetime.now().isoformat(), int(success)))
+    conn.commit()
+    conn.close()
+
+
+def record_site_probe_duration(site: dict, elapsed_ms: float, flag: str | None = None,
+                               success: bool | None = None) -> None:
+    """原子累计线路探测耗时与结果；success=None 的历史耗时样本不进入成功率分母。"""
+    if not site.get("key") or not (isinstance(elapsed_ms, (int, float))
+            and not isinstance(elapsed_ms, bool) and math.isfinite(elapsed_ms) and elapsed_ms >= 0):
+        return
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO search_sites (site_key, site_name, probe_count, total_probe_duration_ms)
+            VALUES (?, ?, 1, ?)
+            ON CONFLICT(site_key) DO UPDATE SET
+                probe_count = probe_count + 1,
+                total_probe_duration_ms = total_probe_duration_ms + excluded.total_probe_duration_ms
+        """, (site["key"], site.get("name", ""), elapsed_ms))
+        if flag is not None:
+            conn.execute("""
+                INSERT INTO line_probe_stats
+                    (site_key, flag, probe_count, total_duration_ms, last_duration_ms, last_probed_at,
+                     result_count, success_count)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                ON CONFLICT(site_key, flag) DO UPDATE SET
+                    probe_count = probe_count + 1,
+                    total_duration_ms = total_duration_ms + excluded.total_duration_ms,
+                    last_duration_ms = excluded.last_duration_ms,
+                    last_probed_at = excluded.last_probed_at,
+                    result_count = result_count + excluded.result_count,
+                    success_count = success_count + excluded.success_count
+            """, (site["key"], flag, elapsed_ms, elapsed_ms, time.time(),
+                  int(isinstance(success, bool)), int(success is True)))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_line_probe_averages(site_keys: list[str]) -> dict[tuple[str, str], float]:
+    """一次读取本轮站点的线路平均耗时，供扫描使用稳定快照排序。"""
+    if not site_keys:
+        return {}
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" * len(site_keys))
+        rows = conn.execute(
+            "SELECT site_key, flag, total_duration_ms / probe_count AS avg_ms "
+            f"FROM line_probe_stats WHERE site_key IN ({placeholders}) AND probe_count > 0", site_keys,
+        ).fetchall()
+        return {(r["site_key"], r["flag"]): r["avg_ms"] for r in rows}
+    finally:
+        conn.close()
 
 
 def list_search_sites() -> list[dict]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT site_key, site_name, search_count, last_searched_at, disabled "
-        "FROM search_sites ORDER BY disabled ASC, search_count DESC, site_key ASC"
+        "SELECT s.site_key, site_name, search_count, last_searched_at, disabled, "
+        "completed_count, s.success_count, probe_count, "
+        "100.0 * s.success_count / NULLIF(completed_count, 0) AS success_rate, "
+        "total_probe_duration_ms / NULLIF(probe_count, 0) AS avg_probe_duration_ms, "
+        "COALESCE(p.result_count, 0) AS probe_result_count, "
+        "COALESCE(p.success_count, 0) AS probe_success_count, "
+        "100.0 * p.success_count / NULLIF(p.result_count, 0) AS probe_success_rate "
+        "FROM search_sites s LEFT JOIN (SELECT site_key, SUM(result_count) AS result_count, "
+        "SUM(success_count) AS success_count FROM line_probe_stats GROUP BY site_key) p "
+        "ON s.site_key = p.site_key ORDER BY disabled ASC, search_count DESC, s.site_key ASC"
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    sites = [dict(r) for r in rows]
+    for site in sites:
+        # 与 CINE siteGroups.ts 的 NETDISK_NAME 规则保持一致；这是名称识别而非播放验证。
+        site["is_netdisk"] = bool(re.search(r"盘|夸父|夸克|阿里云|迅雷|天翼", site["site_name"] or site["site_key"]))
+    return sites
 
 
 def get_disabled_site_keys() -> set[str]:

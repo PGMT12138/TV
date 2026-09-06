@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from database import get_conn
+from database import get_conn, record_site_probe_duration, get_line_probe_averages
 from bridge import active_device, call_device, _ids
 
 PLAYER_TIMEOUT = 25.0         # playerContent 最长等待（含 WebView 嗅探/网盘转存）
@@ -510,15 +510,18 @@ def _flag_quality_bonus(flag: str) -> float:
 
 def _duration_abnormal(metrics: dict | None) -> bool:
     """时长明显偏短或偏长的线路必须与正常线路分层，不能靠其他指标翻盘。"""
-    return bool(metrics and metrics.get("durationMatch") in ("short", "long"))
+    return bool(metrics and (0 < (metrics.get("durationS") or 0) < 600
+                             or metrics.get("durationMatch") in ("short", "long")))
 
 
 def _recommendation_sort_key(r: dict) -> tuple:
-    """最终推荐排序：时长异常绝对沉底，其后才比较广告与综合质量。"""
+    """最终推荐排序：时长、速度先把关，清晰度优先于广告，同清晰度再比较广告和评分。"""
     metrics = r.get("metrics") or {}
     total = (metrics.get("scores") or {}).get("total") or 0.0
     adjusted = total - 0.06 * _site_ad_rate(r.get("siteKey") or "")
     return (1 if _duration_abnormal(metrics) else 0,
+            1 if (metrics.get("throughputMbps") or 0) < GOOD_MIN_MBPS else 0,
+            -(metrics.get("height") or 0),
             AD_RANK.get(metrics.get("adLevel"), len(AD_RANK)),
             -adjusted)
 
@@ -545,6 +548,28 @@ def _fail(cand: dict, error: str) -> dict:
 
 
 async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
+    """服务端记录单条线路从解析播放地址到媒体探测完成的耗时，不含扫描排队及详情请求。"""
+    started = time.monotonic()
+    cancelled = False
+    result = None
+    try:
+        result = await _probe_candidate(cand, ref_s)
+        return result
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        if not cancelled:
+            elapsed_ms = (time.monotonic() - started) * 1000
+            try:
+                record_site_probe_duration({"key": cand["siteKey"], "name": cand.get("siteName", "")},
+                                           elapsed_ms, flag=cand.get("flag", ""),
+                                           success=isinstance(result, dict) and result.get("status") == "ok")
+            except Exception:
+                pass  # 统计落库失败不影响探测结果
+
+
+async def _probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
     site_key, flag, episode_id = cand["siteKey"], cand["flag"], cand["episodeId"]
     t0 = time.monotonic()
     try:
@@ -857,6 +882,14 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         # 站点按历史质量先验排序（无历史给中性 0.5，匹配分名次只作微小修正防同分乱序）。
         # 前端会把当前/历史来源放在 matches 首位；同先验时保留该顺序，让它优先进入详情首批。
         site_priors = {m["key"]: _site_prior(m["key"]) for m in matches}
+        try:
+            line_averages = get_line_probe_averages([m["key"] for m in matches])
+        except Exception:
+            line_averages = {}  # 统计不可用时沿用原排序，不能阻断扫描。
+
+        def probe_duration(cand: dict) -> float:
+            # 同站同线路跨影片共享历史；无样本置后，0ms 是有效样本。
+            return line_averages.get((cand["siteKey"], cand["flag"]), float("inf"))
 
         def site_order(idx_m: tuple[int, dict]) -> float:
             idx, m = idx_m
@@ -870,7 +903,6 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
             """把一个站点详情拆成关键词优先线路和普通线路候选。"""
             priority_lines, normal_lines = [], []
             flags = sorted(data.get("flags") or [], key=lambda f: _flag_rank(f.get("flag") or ""))
-            queued = 0
             for f in flags:
                 eps = f.get("episodes") or []
                 if not eps or not eps[0].get("url"):
@@ -880,10 +912,12 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                         "episodeId": eps[0]["url"]}
                 if _flag_rank(f.get("flag") or "") == 0:
                     priority_lines.append(cand)
-                elif queued < FLAGS_PER_SITE:
+                else:
                     normal_lines.append(cand)
-                    queued += 1
-            return priority_lines, normal_lines
+            # 先按耗时排序再截本站额度，防止原顺序靠后的快速线路被提前丢弃。
+            priority_lines.sort(key=probe_duration)
+            normal_lines.sort(key=probe_duration)
+            return priority_lines, normal_lines[:FLAGS_PER_SITE]
 
         sem = asyncio.Semaphore(DETAIL_CONCURRENCY)
 
@@ -941,7 +975,8 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         await collect_details(ordered_matches[DETAIL_CONCURRENCY:], False)
 
         # 线路按名字启发式分流：4K/蓝光/超清等进优先批次（全局 ≤PRIORITY_LINES_CAP 条全量实测，
-        # 不足 PRIORITY_FILL_MIN 条时从普通批次按排序补齐，超额时按"站点先验 + 关键词规格"
+        # 不足 PRIORITY_FILL_MIN 条时从普通批次按排序补齐，超额时先按历史探测耗时，
+        # 再按"站点先验 + 关键词规格"
         # 全局择优），其余进普通批次（每站 ≤FLAGS_PER_SITE 条，达标即停）
         priority_cap = max(0, priority_cap - early_priority_count)
         prio_pool: list[dict] = []  # 全部关键词线路候选：全局排序后再截优先额度（超额择优）
@@ -957,27 +992,30 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
             site_normals[m["key"]] = [c for c in site_normal
                                       if f"{c['siteKey']}::{c['flag']}" not in early_probe_keys]
         # 关键词线路全局择优：超额（全网 4K/蓝光线 > 50 条）时不能"站点处理顺序先到先得"——
-        # 按 站点历史先验（成功率/清晰度/速度/广告率）+ 关键词规格细分 降序取前 priority_cap 条；
-        # 稳定排序保持站点先验序与站内线路原序
-        prio_pool.sort(key=lambda c: -((0.5 if site_priors[c["siteKey"]] is None else site_priors[c["siteKey"]])
-                                       + _flag_quality_bonus(c["flag"])))
+        # 按历史平均探测耗时升序取前 priority_cap 条，耗时相同/未知时沿用质量先验。
+        prio_pool.sort(key=lambda c: (probe_duration(c),
+                                     -((0.5 if site_priors[c["siteKey"]] is None else site_priors[c["siteKey"]])
+                                       + _flag_quality_bonus(c["flag"]))))
         priority = prio_pool[:priority_cap]  # 优先线路：全部实测，不受达标即停限制
-        # 额度外关键词线路回落普通批次：放回各自站点普通切片头部（关键词线路排本站普通线
-        # 之前，与旧口径一致），且与本站普通线合并后仍受每站 ≤FLAGS_PER_SITE 条约束
+        # 额度外关键词线路回落普通批次，与本站普通线按耗时合并后再截取每站额度。
         overflow: dict[str, list[dict]] = {}
         for cand in prio_pool[priority_cap:]:
             overflow.setdefault(cand["siteKey"], []).append(cand)
         normal: list[dict] = []
         for m in ordered_matches:
-            normal.extend((overflow.get(m["key"], []) + site_normals.get(m["key"], []))[:FLAGS_PER_SITE])
+            candidates = overflow.get(m["key"], []) + site_normals.get(m["key"], [])
+            normal.extend(sorted(candidates, key=probe_duration)[:FLAGS_PER_SITE])
+        normal.sort(key=probe_duration)
         # 优先批次不足 30 条（冷门片 4K/蓝光关键词线路少）：从普通批次头部（即排序规则下
-        # 最优的普通线路：站点质量先验 → 线路名启发式）提级补齐到本轮优先额度 ≤50 条，
+        # 探测耗时最短的普通线路）提级补齐到本轮优先额度 ≤50 条，
         # 提级线路同样全量实测不受达标即停限制——否则优先线只有十几条、普通线又早早
         # 达标即停，本轮探测覆盖面太小
         if len(priority) < PRIORITY_FILL_MIN:
             take = min(priority_cap - len(priority), len(normal))
             priority.extend(normal[:take])
             del normal[:take]
+        # 补齐进来的普通线路也按耗时与原优先线路一起排序。
+        priority.sort(key=probe_duration)
         _emit(task, {"type": "meta", "total": len(priority) + len(normal) + len(results)})
         # 详情失败和首条快速探测结果已实时发出，不能在 meta 后重复推送。
         # 此前各轮结果并入全局评估基数（不重发事件，前端已持有）：早停条件与最终

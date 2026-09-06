@@ -1,6 +1,6 @@
 // 站点分组分类（按智能选源探测结果），播放页选源弹窗使用
 import { ResourceMatch, ScanCandidateResult } from '../types';
-import { compareRecommended } from './scanFormat';
+import { compareRecommended, isUnderTenMinutes } from './scanFormat';
 
 // 分组定义（顺序即展示顺序）
 export const SITE_GROUP_DEFS = [
@@ -59,7 +59,7 @@ export function classifySites(
   const medianDur = durs.length >= 3 ? durs[Math.floor(durs.length / 2)] : 0;
   const durationSuspect = (d: number): boolean => {
     if (d <= 0) return false;
-    if (isFeature && d < 2400) return true;
+    if (isUnderTenMinutes(d) || (isFeature && d < 2400)) return true;
     return medianDur > 0 && (d < medianDur * 0.45 || d > medianDur * 2.2);
   };
 

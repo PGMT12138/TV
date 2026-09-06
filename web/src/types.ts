@@ -219,9 +219,17 @@ export interface ResourceState {
   restoredPick?: boolean;        // 已从历史恢复用户上次的站点/线路，扫描不再自动切源
   restorePending?: boolean;      // 历史站点/资源/线路均精确命中，等待真正起播后再确认恢复
   awaitScan?: boolean;           // 首次加载且无历史偏好：等扫描出现可用线路再起播
-  provisional?: boolean;         // 起播用的是扫描中的临时较优线路，全部完成后自动切最优
+  provisional?: boolean;         // 当前来自探测过程中的初选，最终可按质量提升规则升级
   searchEnded?: boolean;         // 聚合搜索 SSE 已结束（matches 已齐；冷搜渐进合并时扫描可能只覆盖了部分站点）
   needsFreshSearch?: boolean;    // 缓存候选详情全部失效，需要自动清缓存并实时重搜
+  initialAutoPlayPending?: boolean; // 首次观看的 12 秒等待与初选尚未完成
+  autoUpgradeEligible?: boolean;   // 无历史/指定来源时允许两阶段自动升级
+  autoUserPicked?: boolean;        // 手动选线锁定，跨补充扫描保持
+  autoDuringDone?: boolean;        // 探测中升级已真正起播
+  autoFinalDone?: boolean;         // 最终升级已真正起播
+  automaticScanComplete?: boolean; // 搜索及自动补充扫描整体完成
+  manualProbeStarted?: boolean;    // 用户主动补测/重探后仅更新推荐与提示，不再自动质量升级
+  searchStartedAt?: number;        // 区分重新搜索，防止旧异步选源写回
 }
 
 // ---------------- 智能选源（线路测速/清晰度/广告探测） ----------------
@@ -269,6 +277,7 @@ export interface ScanState {
   extending?: boolean;        // 补充扫描进行中（聚合搜索结束后对其余站点再探一轮），提示文案区分用
   userPicked?: boolean;       // 用户手动换源后本影片不再自动切
   switched?: boolean;         // 已执行过自动切换
+  error?: string;
   recommendedKey?: string;    // `${siteKey}::${flag}`
   fastestKey?: string;
   highestKey?: string;

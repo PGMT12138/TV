@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf ../manage/static/cine",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:selection": "node tests/autoSelection.cjs && node tests/scanCompletion.cjs",
+    "test:media": "node tests/mediaHandoff.cjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

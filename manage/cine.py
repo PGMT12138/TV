@@ -374,9 +374,12 @@ async def _search_one(site: dict, wd: str, sem: asyncio.Semaphore) -> tuple[dict
         try:
             data = await call_device("search", {"key": site.get("key", ""), "wd": wd, "quick": False},
                                      timeout=SEARCH_TIMEOUT)
-            return site, data.get("list") or []
+            vods = data.get("list") or []
+            success = not data.get("error") and bool(_site_matches(site, wd, vods))
         except Exception:
-            return site, []
+            vods, success = [], False
+        database.record_search_site_result(site, success)
+        return site, vods
 
 
 def _site_matches(site: dict, wd: str, vods: list) -> list[dict]:
@@ -447,11 +450,14 @@ async def _live_search_events(wd: str, preferred: str = ""):
                     "name": msg.get("siteName", ""),
                 }
                 vods = (msg.get("data") or {}).get("list") or []
+                matched = _site_matches(site, wd, vods)
+                success = not msg.get("error") and not (msg.get("data") or {}).get("error") and bool(matched)
+                database.record_search_site_result(site, success)
                 yield {
                     "type": "site",
                     "siteKey": site["key"],
                     "siteName": site["name"],
-                    "matched": _site_matches(site, wd, vods),
+                    "matched": matched,
                 }
             elif event_type == "done":
                 yield {"type": "done", "searched": int(msg.get("searched") or 0)}
@@ -496,6 +502,7 @@ async def _revalidate_search(device_id: str, key: str):
         dev = active_device()
         if dev is None or dev.id != device_id or not dev.online:
             return  # 设备已切换/离线：不动缓存，下次命中再校验
+        generation = database.get_search_cache_generation()
         cached = database.get_search_cache(device_id, key)
         if cached is None:
             return
@@ -503,7 +510,8 @@ async def _revalidate_search(device_id: str, key: str):
         payload = json.dumps({"results": fresh["results"], "searched": fresh["searched"]}, ensure_ascii=False)
         old = json.loads(cached["results"]).get("results", [])
         if _fingerprint(fresh["results"]) != _fingerprint(old):
-            database.set_search_cache(device_id, key, cached["orig"] or key, payload, time.time(), time.time())
+            database.set_search_cache(device_id, key, cached["orig"] or key, payload, time.time(), time.time(),
+                                      generation=generation)
         else:
             database.touch_search_cache(device_id, key, time.time())
     except Exception:
@@ -526,6 +534,7 @@ async def resource_search(wd: str, year: str = ""):
         return {"deviceOnline": False, "results": [], "searched": 0}
     key = _norm_wd(wd)
     now = time.time()
+    generation = database.get_search_cache_generation()
     cached = database.get_search_cache(dev.id, key)
     if cached and now - cached["created_at"] < SEARCH_CACHE_TTL:
         # 命中：立即返回缓存；距上次校验超 1 小时则后台重搜比对（stale-while-revalidate）
@@ -540,7 +549,7 @@ async def resource_search(wd: str, year: str = ""):
     except RuntimeError as e:
         return {"deviceOnline": False, "error": str(e), "results": [], "searched": 0}
     payload = json.dumps({"results": fresh["results"], "searched": fresh["searched"]}, ensure_ascii=False)
-    database.set_search_cache(dev.id, key, wd, payload, now, now)
+    database.set_search_cache(dev.id, key, wd, payload, now, now, generation=generation)
     if secrets.randbelow(10) == 0:  # 写入时低概率顺手清理过期行，避免表无限增长
         database.clean_search_cache(now - SEARCH_CACHE_TTL)
     return {"deviceOnline": True, **fresh}
@@ -561,6 +570,7 @@ async def resource_search_stream(wd: str, preferred: str = "", fresh: bool = Fal
             return
         key = _norm_wd(wd)
         now = time.time()
+        generation = database.get_search_cache_generation()
         cached = None if fresh else database.get_search_cache(dev.id, key)
         if cached and now - cached["created_at"] < SEARCH_CACHE_TTL:
             if now - max(cached["created_at"], cached["last_checked"]) >= SEARCH_RECHECK:
@@ -588,7 +598,7 @@ async def resource_search_stream(wd: str, preferred: str = "", fresh: bool = Fal
         del matched[60:]
         done_at = time.time()
         payload = json.dumps({"results": matched, "searched": searched}, ensure_ascii=False)
-        database.set_search_cache(dev.id, key, wd, payload, done_at, done_at)
+        database.set_search_cache(dev.id, key, wd, payload, done_at, done_at, generation=generation)
         if secrets.randbelow(10) == 0:
             database.clean_search_cache(done_at - SEARCH_CACHE_TTL)
 
@@ -623,13 +633,14 @@ async def resource_search_invalidate(body: ResourceSearchInvalidateBody):
     if dev is None:
         return {"ok": True, "removed": False}
     key = _norm_wd(body.wd)
+    generation = database.get_search_cache_generation()
     cached = database.get_search_cache(dev.id, key)
     if cached is None:
         return {"ok": True, "removed": False}
     payload, removed = _remove_cached_candidate(cached["results"], body.siteKey, body.vodId)
     if removed:
         database.set_search_cache(dev.id, key, cached["orig"] or body.wd, payload,
-                                  cached["created_at"], cached["last_checked"])
+                                  cached["created_at"], cached["last_checked"], generation=generation)
     return {"ok": True, "removed": removed}
 
 

@@ -6,8 +6,6 @@ import { imgUrl } from '../api';
 import {
   Play,
   Bookmark,
-  Share2,
-  Download,
   Star,
   Users,
   Film,
@@ -21,20 +19,15 @@ export const DetailView: React.FC = () => {
     getMovieById,
     movies,
     loadMovieDetail,
-    resolveResources,
-    movieResources,
     currentEpisodes,
-    startScan,
     navigateTo,
     goBack,
     toggleFavorite,
     isFavorite,
-    showToast,
   } = useApp();
 
   const movie = getMovieById(selectedMovieId || '');
   const movieId = movie?.id || selectedMovieId || '';
-  const resource = movieResources[movieId];
   const activeLine = currentEpisodes(movieId);
   const favorited = movie ? isFavorite(movie.id) : false;
   const [detailLoading, setDetailLoading] = useState(!movie);
@@ -42,26 +35,20 @@ export const DetailView: React.FC = () => {
   const [infoFetching, setInfoFetching] = useState(false);
   const infoIncomplete = !movie?.description;
 
-  // 进入详情：补全元数据 → 触发资源解析
+  // 详情页只补全影片资料，站点搜索和线路探测由播放页启动。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const local = getMovieById(movieId);
       setDetailLoading(!local);
       setInfoFetching(!local?.description);
-      const full = await loadMovieDetail(movieId);
+      await loadMovieDetail(movieId);
       if (cancelled) return;
       setInfoFetching(false);
       setDetailLoading(false);
-      if (full) resolveResources(movieId);
     })();
     return () => { cancelled = true; };
   }, [movieId]);
-
-  // 详情页也要看站点分类：资源就绪即触发智能选源扫描（AppContext 内部有去重复用）
-  useEffect(() => {
-    if (resource?.status === 'ready') startScan(movieId);
-  }, [resource?.status, movieId, startScan]);
 
   if (!movie) {
     return (
@@ -93,14 +80,6 @@ export const DetailView: React.FC = () => {
     navigateTo('watch', { movieId: movie.id, episodeId: activeLine?.episodes[0]?.id });
   };
 
-  const handleShare = () => {
-    navigator.clipboard?.writeText(window.location.href);
-    showToast(`《${movie.title}》观影链接已复制到剪贴板`, 'success');
-  };
-
-  const handleDownload = () => {
-    showToast(`已将《${movie.title}》加入离线缓存队列`, 'info');
-  };
 
   return (
     <div id="detail-view" className="space-y-12 pb-20 animate-fade-blur">
@@ -234,57 +213,11 @@ export const DetailView: React.FC = () => {
                 <span>{favorited ? '已在收藏夹' : '收藏作品'}</span>
               </button>
 
-              <button
-                onClick={handleShare}
-                className="flex items-center gap-2 px-4 py-3.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 text-sm font-medium whitespace-nowrap shrink-0 transition-all"
-                title="分享链接"
-              >
-                <Share2 className="w-4 h-4" />
-                <span>分享</span>
-              </button>
 
-              <button
-                onClick={handleDownload}
-                className="flex items-center gap-2 px-4 py-3.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 text-sm font-medium whitespace-nowrap shrink-0 transition-all"
-                title="缓存至本地"
-              >
-                <Download className="w-4 h-4" />
-                <span>缓存</span>
-              </button>
+
+
             </div>
 
-            {/* 播放资源状态（选源与选集在播放页操作） */}
-            <div className="text-xs text-zinc-500 min-h-[16px]">
-              {(!resource || resource.status === 'searching') && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
-                  正在设备站点中搜索播放资源…
-                </span>
-              )}
-              {resource?.status === 'selecting' && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
-                  正在「{resource.selected?.siteName}」获取线路…
-                </span>
-              )}
-              {resource?.status === 'ready' && (
-                <span>{resource.matches.length} 个来源站点可用，选源与选集请在播放页操作</span>
-              )}
-              {resource?.status === 'offline' && (
-                <span className="text-rose-300/80">设备不在线，无法搜索播放资源（影片信息仍可浏览）</span>
-              )}
-              {resource?.status === 'noresult' && (
-                <span className="text-amber-300/80">设备站点暂无播放资源</span>
-              )}
-              {resource?.status === 'error' && (
-                <button
-                  onClick={() => resolveResources(movieId)}
-                  className="text-rose-300/80 hover:text-rose-300 underline underline-offset-2"
-                >
-                  资源解析失败：{resource.error || '未知错误'}，点击重试
-                </button>
-              )}
-            </div>
           </div>
         </div>
       </div>

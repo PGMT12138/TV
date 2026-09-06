@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MovieItem, WatchHistoryItem, PageView, FilterState, UserProfile, ResourceState, ResourceMatch, ResourceFlag, Episode, CatalogSection, ScanState, ScanCandidateResult } from '../types';
 import { api } from '../api';
+import { referenceDurationSeconds } from '../utils/referenceDuration';
 
 interface ToastState {
   id: string;
@@ -292,14 +293,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const run = resourceRunRef.current.get(movieId) || 0;
     const isCurrentRun = () => (resourceRunRef.current.get(movieId) || 0) === run;
     resolvingRef.current.add(movieId);
+    const raw = options.ignorePreferences ? undefined : (movie as any).raw as { key?: string; id?: string } | undefined;
+    const saved = options.ignorePreferences ? undefined : historyRef.current.find((h) => h.movieId === movieId && h.siteKey);
+    const preferenceRequested = !!(raw?.key || saved?.siteKey);
     setResource(movieId, {
       status: 'searching', matches: [], flags: [], selected: undefined, error: undefined,
       scan: undefined, restoredPick: undefined, restorePending: undefined,
-      awaitScan: undefined, provisional: undefined, needsFreshSearch: undefined,
+      awaitScan: undefined, provisional: undefined, needsFreshSearch: undefined, searchEnded: false,
+      initialAutoPlayPending: !preferenceRequested, autoUpgradeEligible: !preferenceRequested,
+      autoUserPicked: false, autoDuringDone: false, autoFinalDone: false, automaticScanComplete: false, manualProbeStarted: false,
+      searchStartedAt: Date.now(),
     });
     // 资源型影片（从资源卡进入）优先精确锁定自身来源；观看历史里存了上次选择的站点/线路，优先恢复
-    const raw = options.ignorePreferences ? undefined : (movie as any).raw as { key?: string; id?: string } | undefined;
-    const saved = options.ignorePreferences ? undefined : historyRef.current.find((h) => h.movieId === movieId && h.siteKey);
 
     // SSE 流式聚合：站点结果到一个合并一个（选源弹窗渐进可见）。选定来源的时机 =
     // 预设/历史站点命中、或出现片名精确匹配（score=100）、或超过 2s 宽限取当前最优、或流结束——
@@ -362,10 +367,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setResource(movieId, { status: 'noresult', matches: [] });
         }
         onDecide?.();
-        // matches 至此已齐：若扫描已用早期快照跑完（只覆盖了部分站点），发起补充扫描。
-        // searchEnded 落 state 供"扫描结束"触发路径稍后从 ref 读到；本轮事实由参数传入
+        // 由状态提交后的 effect 检查补充扫描，确保读取到最后一批搜索结果。
         setResource(movieId, { searchEnded: true });
-        maybeExtendScanRef.current?.(movieId, 'search');
       } else if (ev.type === 'error') {
         if (resourceSearchEsRef.current.get(movieId) === searchEs) resourceSearchEsRef.current.delete(movieId);
         resourceSearchCancelRef.current.delete(movieId);
@@ -378,7 +381,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tryDecide();
         onDecide?.();
         setResource(movieId, { searchEnded: true });
-        maybeExtendScanRef.current?.(movieId, 'search');
       }
     }, raw?.key || saved?.siteKey || '', !!options.fresh);
     resourceSearchEsRef.current.set(movieId, searchEs);
@@ -391,7 +393,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const preferenceRequested = !!(raw?.key || saved?.siteKey);
     // 默认路径（无资源卡预设、无历史偏好）：不急起播，等扫描出现可用线路后再选优。
     setResource(movieId, { awaitScan: !preferenceRequested });
     try {
@@ -494,8 +495,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = prev[movieId];
       if (!res) return prev;
       const scan = res.scan && !res.scan.userPicked ? { ...res.scan, userPicked: true } : res.scan;
-      if (!res.restorePending && !res.restoredPick && scan === res.scan) return prev;
-      return { ...prev, [movieId]: { ...res, restorePending: undefined, restoredPick: undefined, scan } };
+      return { ...prev, [movieId]: { ...res, restorePending: undefined, restoredPick: undefined, scan,
+        autoUserPicked: true, initialAutoPlayPending: false, awaitScan: false } };
     });
   }, []);
 
@@ -535,10 +536,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ---- 智能选源扫描（SSE 渐进消费，结果按 siteKey::flag 幂等合并） ----
   const scanEsRef = useRef<EventSource | null>(null);
   const lazyEsRef = useRef<EventSource | null>(null);  // 懒补测独立流，不打断主扫描
-  // 搜索流结束后的补充扫描（冷搜渐进合并时首轮扫描只覆盖了部分站点）。
-  // 触发时机有二：搜索流结束 / 首轮扫描结束——本轮刚发生的事实必须由参数传入：
-  // setState 之后同步读 ref 拿不到刚写的状态（ moviesRef 时序坑同类），读 ref 必死
-  const maybeExtendScanRef = useRef<((movieId: string, justEnded: 'search' | 'scan') => void) | null>(null);
+  // 搜索流和首轮探测都完成后，由 effect 使用提交后的结果发起补充扫描。
   const extendingRef = useRef<Set<string>>(new Set());  // 已发起过补充扫描的影片，同步防重入
   useEffect(() => () => {
     scanEsRef.current?.close();
@@ -571,7 +569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 消费一次扫描的 SSE 流。lazy=true 为选源弹窗的单站懒补测：只并入线路结果，
   // 不动扫描状态与推荐键——避免补测完成误触发"自动切最优线路"打断用户正在看的线路。
   // extend=true 为搜索结束后的补充扫描：正常并入状态与推荐键，total 以已测数为基数累加
-  const openScanStream = useCallback((movieId: string, scanId: string, opts?: { lazy?: boolean; extend?: boolean; onDone?: () => void }) => {
+  const openScanStream = useCallback((movieId: string, scanId: string, opts?: { lazy?: boolean; extend?: boolean; onDone?: (ok: boolean) => void }) => {
     const lazy = !!opts?.lazy;
     const run = resourceRunRef.current.get(movieId) || 0;
     const esRef = lazy ? lazyEsRef : scanEsRef;
@@ -602,10 +600,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fastestKey: msg.fastest || undefined,
           highestKey: msg.highest || undefined,
           extending: false,
+          error: msg.error || undefined,
         });
         es.close();
         if (esRef.current === es) esRef.current = null;
-        opts?.onDone?.();
+        opts?.onDone?.(!msg.error);
       }
     };
     es.onerror = () => {
@@ -617,8 +616,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Date.now() - startedAt > 180_000) {
         es.close();
         if (esRef.current === es) esRef.current = null;
-        if (!lazy) patchScan(movieId, { status: 'done', extending: false });
-        opts?.onDone?.();
+        if (!lazy) patchScan(movieId, { status: 'done', extending: false, error: '探测连接中断' });
+        opts?.onDone?.(false);
       }
     };
     return es;
@@ -640,8 +639,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
     // 片库片长（如"118分钟"）解析成秒传给后端，做时长交叉比对（识别预告片/拼接广告）
     const movie = moviesRef.current.find((m) => m.id === movieId);
-    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
-    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const refDurationS = referenceDurationSeconds(movie?.duration);
     setMovieResources((prev) => {
       const cur = prev[movieId];
       if (!cur) return prev;
@@ -661,7 +659,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
       patchScan(movieId, { scanId: r.scanId });
-      openScanStream(movieId, r.scanId, { onDone: () => maybeExtendScanRef.current?.(movieId, 'scan') });
+      openScanStream(movieId, r.scanId);
     }).catch(() => {
       if ((resourceRunRef.current.get(movieId) || 0) !== run) return;
       showToast('智能选源启动失败', 'warning');
@@ -678,49 +676,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 首轮早停后其余站点的 4K/蓝光/超清线路永远不会被探。此处等搜索流结束（或首轮
   // 扫描结束、取两者较晚者）后，对 matches 里未探测的站点发起补充扫描：同样
   // "优先线路全量实测 → 普通线路达标即停"，结果并入同一扫描状态并重新参与自动选优。
-  // justEnded 说明本轮刚结束的是哪件事——该事实刚 setState 完、同步读 ref 必为旧值，
-  // 只能由触发方以参数告知；另一条件是更早写入的，ref 里已是新值，安全
-  const maybeExtendScan = useCallback((movieId: string, justEnded: 'search' | 'scan') => {
+  // 在 React 提交结果后检查，避免搜索结束和扫描结束同一批更新时互相读到旧值。
+  const maybeExtendScan = useCallback((movieId: string) => {
     if (extendingRef.current.has(movieId)) return;
     const res = movieResourcesRef.current[movieId];
-    const searchEnded = justEnded === 'search' || !!res?.searchEnded;
-    const scanDone = justEnded === 'scan' || res?.scan?.status === 'done';
-    if (!searchEnded || !scanDone || !res?.scan) return;
+    if (!res?.searchEnded || res.scan?.status !== 'done' || res.scan.error || res.automaticScanComplete) return;
     const run = resourceRunRef.current.get(movieId) || 0;
     const scanned = new Set(res.scan.results.map((r) => r.siteKey));
     const seen = new Set<string>();
     const cands = res.matches
       .filter((m) => !scanned.has(m.siteKey) && !seen.has(m.siteKey) && (seen.add(m.siteKey), true))
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
-    if (!cands.length) return;
+    if (!cands.length) {
+      patchResource(movieId, { automaticScanComplete: true });
+      return;
+    }
     extendingRef.current.add(movieId);
     const movie = moviesRef.current.find((m) => m.id === movieId);
-    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
-    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const refDurationS = referenceDurationSeconds(movie?.duration);
     // 此前各轮已实测的线路结果随请求带给后端：优先额度跨扫描封顶 + 早停/推荐键全局评估
     const prior = res.scan.results;
-    // 回到 running 态并重置已切标记：补充测完后按新推荐键重新自动选优；
-    // 当前线路仍视为临时（provisional），全部测完即切全局最优
+    // 补充探测属于同一次自动选优过程，保留中途/最终升级额度。
     patchScan(movieId, { status: 'running', switched: undefined, extending: true });
-    patchResource(movieId, { provisional: true });
+    patchResource(movieId, { provisional: true, automaticScanComplete: false });
     showToast(`正在补充探测其余 ${cands.length} 个站点的线路…`, 'info');
     api.resourceScan(cands, refDurationS, false, prior).then((r) => {
       if ((resourceRunRef.current.get(movieId) || 0) !== run) return;
       if (r.error || !r.scanId) {
         extendingRef.current.delete(movieId);
-        patchScan(movieId, { status: 'done', extending: false });
+        patchScan(movieId, { status: 'done', extending: false, error: r.error || '补充探测启动失败' });
         showToast(`补充探测启动失败：${r.error || '未知错误'}`, 'warning');
         return;
       }
-      openScanStream(movieId, r.scanId, { extend: true });
+      openScanStream(movieId, r.scanId, { extend: true, onDone: (ok) => {
+        if (ok) patchResource(movieId, { automaticScanComplete: true });
+      } });
     }).catch(() => {
       if ((resourceRunRef.current.get(movieId) || 0) !== run) return;
       extendingRef.current.delete(movieId);
-      patchScan(movieId, { status: 'done', extending: false });
+      patchScan(movieId, { status: 'done', extending: false, error: '补充探测启动失败' });
       showToast('补充探测启动失败', 'warning');
     });
   }, [patchScan, patchResource, openScanStream, showToast]);
-  maybeExtendScanRef.current = maybeExtendScan;
+  useEffect(() => {
+    for (const movieId of Object.keys(movieResources)) maybeExtendScan(movieId);
+  }, [movieResources, maybeExtendScan]);
 
   // ---- 懒补测：选源弹窗对单个未探测站点发起补扫，结果渐进并入 ----
   const [probingSites, setProbingSites] = useState<Set<string>>(new Set());
@@ -737,11 +737,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     const match = res.matches.find((m) => m.siteKey === siteKey);
     if (!match) return;
+    patchResource(movieId, { manualProbeStarted: true });
     const run = resourceRunRef.current.get(movieId) || 0;
     setProbingSites((prev) => new Set(prev).add(siteKey));
     const movie = moviesRef.current.find((m) => m.id === movieId);
-    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
-    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const refDurationS = referenceDurationSeconds(movie?.duration);
     const finish = () => setProbingSites((prev) => {
       const next = new Set(prev);
       next.delete(siteKey);
@@ -761,7 +761,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       finish();
       showToast('补测启动失败', 'warning');
     });
-  }, [showToast, openScanStream, probingSites]);
+  }, [showToast, openScanStream, probingSites, patchResource]);
 
   // ---- 强制重探：逐线全量实测、不做达标即停（选源弹窗"重新探测"按钮用）。
   // 与懒补测一样走 lazy 流渐进并入现有扫描，不动推荐键，不触发自动切源 ----
@@ -783,11 +783,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }))
       .filter((c) => (seen.has(c.key) ? false : (seen.add(c.key), true)));
     if (!cands.length) return;
+    patchResource(movieId, { manualProbeStarted: true });
     const run = resourceRunRef.current.get(movieId) || 0;
     setProbingSites(new Set(cands.map((c) => c.key)));
     const movie = moviesRef.current.find((m) => m.id === movieId);
-    const dm = movie?.duration?.match(/(\d+)\s*分钟/);
-    const refDurationS = dm ? parseInt(dm[1], 10) * 60 : undefined;
+    const refDurationS = referenceDurationSeconds(movie?.duration);
     const finish = () => setProbingSites(new Set());
     api.resourceScan(cands, refDurationS, true).then((r) => {
       if ((resourceRunRef.current.get(movieId) || 0) !== run) return;
@@ -802,7 +802,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       finish();
       showToast('重新探测启动失败', 'warning');
     });
-  }, [showToast, openScanStream, probingSites]);
+  }, [showToast, openScanStream, probingSites, patchResource]);
 
   // ---- 彻底重新搜索：清缓存/历史来源偏好/当前与推荐线路，再从 App 发起全新搜索 ----
   const restartResourceSearch = useCallback(async (movieId: string) => {

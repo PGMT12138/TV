@@ -41,6 +41,29 @@ class ProbeDurationRankingTests(unittest.TestCase):
         self.assertFalse(probe._line_good(line("long", "long", 1.0)))
         self.assertTrue(probe._line_good(line("normal", "ok", 0.2)))
 
+    def test_under_ten_minutes_is_abnormal_even_without_reference_duration(self):
+        short = line("short", None, 1.0)
+        short["metrics"]["durationS"] = 599
+        self.assertTrue(probe._duration_abnormal(short["metrics"]))
+        self.assertFalse(probe._line_good(short))
+        short["metrics"]["durationS"] = 600
+        self.assertFalse(probe._duration_abnormal(short["metrics"]))
+
+    @patch.object(probe, "_site_ad_rate", return_value=0.0)
+    def test_resolution_precedes_ads_but_slow_lines_still_rank_last(self, _mock_rate):
+        high_ads = line("4k", "ok", 0.1, ad_level="dirty")
+        low_clean = line("1080", "ok", 1.0)
+        low_clean["metrics"]["height"] = 1080
+        self.assertIs(min([low_clean, high_ads], key=probe._recommendation_sort_key), high_ads)
+        high_ads["metrics"]["throughputMbps"] = 2
+        self.assertIs(min([low_clean, high_ads], key=probe._recommendation_sort_key), low_clean)
+
+    @patch.object(probe, "_site_ad_rate", return_value=0.0)
+    def test_equal_resolution_prefers_clean_even_with_lower_score(self, _mock_rate):
+        clean = line("clean", "ok", 0.1)
+        ads = line("ads", "ok", 1.0, ad_level="dirty")
+        self.assertIs(min([ads, clean], key=probe._recommendation_sort_key), clean)
+
 
 if __name__ == "__main__":
     unittest.main()

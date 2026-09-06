@@ -39,16 +39,20 @@ export { isMobileDevice };
 export interface RankableMetrics {
   throughputMbps: number;
   height?: number;
+  adLevel?: string;
   codec?: string;
   acodec?: string;
   moovEnd?: boolean;   // MP4 索引在文件尾（非 faststart）：仅移动端浏览器起播极慢
   durationMatch?: 'short' | 'ok' | 'long';
+  durationS?: number;
   scores: { total: number };
 }
 
 /** 时长明显偏短/偏长均视为异常；异常线路必须排在所有正常线路之后。 */
-export const isDurationAbnormal = (metrics?: Pick<RankableMetrics, 'durationMatch'>) =>
-  metrics?.durationMatch === 'short' || metrics?.durationMatch === 'long';
+export const isUnderTenMinutes = (seconds?: number) =>
+  typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 && seconds < 600;
+export const isDurationAbnormal = (metrics?: Pick<RankableMetrics, 'durationMatch' | 'durationS'>) =>
+  isUnderTenMinutes(metrics?.durationS) || metrics?.durationMatch === 'short' || metrics?.durationMatch === 'long';
 
 /** 推荐线路比较器：先按时长正常/异常做绝对分层，再比较可播性、速度、清晰度与综合评分。
  *  因此异常线路无论多清晰、多快，都不可能越过任意正常时长线路。 */
@@ -64,5 +68,8 @@ export function compareRecommended<T extends { metrics?: RankableMetrics }>(a: T
   if (aBad !== bBad) return aBad ? 1 : -1;
   const dh = (n.height ?? 0) - (m.height ?? 0);
   if (dh !== 0) return dh;
+  const adRank: Record<string, number> = { clean: 0, suspect: 1, dirty: 2 };
+  const da = (adRank[m.adLevel || ''] ?? 3) - (adRank[n.adLevel || ''] ?? 3);
+  if (da !== 0) return da;
   return n.scores.total - m.scores.total;
 }

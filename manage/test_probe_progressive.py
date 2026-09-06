@@ -38,6 +38,7 @@ class ProbeProgressiveTests(unittest.IsolatedAsyncioTestCase):
         task = probe.ScanTask()
         with patch.object(probe, "_call_device_wait", side_effect=fake_call), \
                 patch.object(probe, "probe_candidate", side_effect=fake_probe), \
+                patch.object(probe, "get_line_probe_averages", return_value={}), \
                 patch.object(probe, "_site_prior", return_value=None):
             runner = asyncio.create_task(probe._run_scan(task, matches))
             await asyncio.wait_for(slow_detail_started.wait(), timeout=1)

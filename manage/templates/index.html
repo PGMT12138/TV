@@ -865,6 +865,26 @@
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .site-stats { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+        #siteList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        #siteList .site-row { margin: 0; min-width: 0; display: block; padding: 16px; }
+        #siteList .site-head { display: flex; align-items: center; gap: 10px; }
+        #siteList .site-name { overflow-wrap: anywhere; }
+        #siteList .site-head .btn { flex-shrink: 0; }
+        #siteList .site-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0 10px; }
+        #siteList .site-metric-label { font-size: 11px; color: var(--text-muted); }
+        #siteList .site-metric-value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+        #siteList .site-stats { white-space: normal; line-height: 1.8; }
+        .site-kind { display: inline-block; font-size: 10px; border-radius: 999px; padding: 2px 8px; background: var(--surface); color: var(--text-muted); margin-top: 8px; }
+        .site-kind.netdisk { color: var(--accent); background: var(--accent-dim); }
+        #searchPanel .site-toolbar { flex-wrap: wrap; align-items: center; }
+        .site-sort-label { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+        #siteSort { color-scheme: dark; width: auto; margin: 0; padding: 7px 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        #siteSort option { background: #18181b; color: var(--text); }
+        @media (max-width: 1050px) { #siteList { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) {
+            #siteList { grid-template-columns: 1fr; }
+            .site-sort-label { margin-left: 0; }
+        }
 
         @media (max-width: 767px) {
             .device-grid { grid-template-columns: 1fr; }
@@ -991,10 +1011,20 @@
         <div id="searchPanel" style="display:none">
             <div class="device-section">
                 <div class="device-section-title">🔍 搜索站点</div>
-                <div class="device-section-sub">视频网站每次搜索时自动登记参与站点；禁用为<b>全局配置</b>，对所有设备及所有搜索生效</div>
+                <div class="device-section-sub">成功率 = 命中影片次数 / 已完成搜索次数，空结果、错误及超时计为未成功；缓存命中及取消的请求不计入。平均探测耗时由服务端统计单条线路从解析播放地址到媒体探测完成的时间，包含失败和超时，不含排队、详情请求及取消的探测。统计自功能上线起累计，未探测显示暂无数据。网盘按站点名称自动识别，仅供参考。禁用为<b>全局配置</b>，保留搜索缓存。</div>
                 <div class="site-toolbar">
                     <button class="btn btn-sm btn-test" onclick="setAllSearchSites(false)">全部启用</button>
                     <button class="btn btn-sm btn-batch-del" onclick="setAllSearchSites(true)">全部禁用</button>
+                    <label class="site-sort-label" for="siteSort">排序</label>
+                    <select id="siteSort" onchange="renderSearchSites()">
+                        <option value="default">默认排序</option>
+                        <option value="success-desc">搜索成功率：高到低</option>
+                        <option value="success-asc">搜索成功率：低到高</option>
+                        <option value="probe-desc">探测成功率：高到低</option>
+                        <option value="probe-asc">探测成功率：低到高</option>
+                        <option value="duration-asc">探测耗时：短到长</option>
+                        <option value="duration-desc">探测耗时：长到短</option>
+                    </select>
                 </div>
                 <div id="siteList"></div>
             </div>
@@ -1946,32 +1976,62 @@
             }
         }
 
+        let searchSites = [];
         async function loadSearchSites() {
             let data;
             try {
                 data = await (await fetch('api/search-sites')).json();
             } catch(e) { return; }
+            searchSites = data.sites || [];
+            renderSearchSites();
+        }
+
+        function renderSearchSites() {
             const list = document.getElementById('siteList');
             list.innerHTML = '';
-            if (!data.sites.length) {
+            if (!searchSites.length) {
                 list.innerHTML = '<div class="device-section-sub">暂无记录，视频网站发起搜索后会自动登记参与站点</div>';
                 return;
             }
-            data.sites.forEach(s => {
+            const sort = document.getElementById('siteSort').value;
+            const sites = [...searchSites].sort((a, b) => {
+                if (sort !== 'default') {
+                    const field = sort.startsWith('success') ? 'success_rate' : sort.startsWith('probe') ? 'probe_success_rate' : 'avg_probe_duration_ms';
+                    // 无样本始终排在末尾，0% 和 0ms 都是有效统计值。
+                    if (a[field] == null && b[field] != null) return 1;
+                    if (a[field] != null && b[field] == null) return -1;
+                    const diff = (a[field] ?? 0) - (b[field] ?? 0);
+                    if (diff) return sort.endsWith('asc') ? diff : -diff;
+                } else {
+                    const diff = a.disabled - b.disabled || b.completed_count - a.completed_count;
+                    if (diff) return diff;
+                }
+                return a.site_key.localeCompare(b.site_key);
+            });
+            sites.forEach(s => {
                 const row = document.createElement('div');
                 row.className = 'site-row' + (s.disabled ? ' disabled' : '');
                 row.innerHTML = `
-                    <div class="site-info">
+                    <div class="site-head"><div class="site-info">
                         <div class="site-name">${esc(s.site_name || s.site_key)}</div>
                         <div class="site-key" title="${esc(s.site_key)}">${esc(s.site_key)}</div>
+                    </div></div>
+                    <span class="site-kind${s.is_netdisk ? ' netdisk' : ''}" title="按站点名称自动识别，未识别不代表一定不是网盘">${s.is_netdisk ? '网盘 · 自动识别' : '未识别为网盘'}</span>
+                    <div class="site-metrics">
+                        <div><div class="site-metric-label">搜索成功率</div><div class="site-metric-value">${s.success_rate == null ? '暂无数据' : s.success_rate.toFixed(1) + '%'}</div></div>
+                        <div title="该站所有线路探测成功次数 ÷ 已完成探测次数，按次数加权；取消及旧耗时样本不计入"><div class="site-metric-label">平均探测成功率</div><div class="site-metric-value">${s.probe_success_rate == null ? '暂无数据' : s.probe_success_rate.toFixed(1) + '%'}</div></div>
+                        <div><div class="site-metric-label">平均探测耗时</div><div class="site-metric-value">${s.avg_probe_duration_ms == null ? '暂无数据' : (s.avg_probe_duration_ms / 1000).toFixed(2) + ' 秒'}</div></div>
                     </div>
-                    <div class="site-stats">搜索 ${s.search_count} 次 · ${esc(fmtTime(s.last_searched_at))}</div>
+                    <div class="site-stats">命中 ${s.success_count} / 完成 ${s.completed_count} 次 · 探测 ${s.probe_count} 次</div>
+                    <div class="site-stats">线路探测成功 ${s.probe_success_count ?? 0} / 已统计 ${s.probe_result_count ?? 0} 次</div>
+                    <div class="site-stats">最近搜索：${esc(fmtTime(s.last_searched_at))}</div>
                 `;
                 const btn = document.createElement('button');
                 btn.className = 'btn btn-sm btn-toggle' + (s.disabled ? '' : ' active');
                 btn.textContent = s.disabled ? 'OFF' : 'ON';
                 btn.onclick = () => toggleSearchSite(s.site_key, !s.disabled);
-                row.appendChild(btn);
+                btn.setAttribute('aria-label', (s.disabled ? '启用 ' : '禁用 ') + (s.site_name || s.site_key));
+                row.querySelector('.site-head').appendChild(btn);
                 list.appendChild(row);
             });
         }
