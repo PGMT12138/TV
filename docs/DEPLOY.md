@@ -51,26 +51,31 @@ app/build/outputs/apk/  # 如需 /apk/ 下载页
 
 ```bash
 # 方式一：配置文件（推荐，和本机一致，直接拷贝）
-# 迁移时把本机 manage/data/tmdb.json 原样拷到服务器同路径即可，内容：
+# 迁移时把本机 manage/data/tmdb.json 原样拷到服务器同路径即可，格式：
 cat > /opt/TV/manage/data/tmdb.json << 'EOF'
 {
-  "api_key": "a0526afca34459ffeb4ddd52b1e5a6d6",
+  "api_key": "换成你的key（见下方获取方式）",
   "proxy": "http://127.0.0.1:7897"
 }
 EOF
 
 # 方式二：systemd 环境变量（编辑 /etc/systemd/system/tv-manage.service 的 [Service] 段）
-Environment=TMDB_API_KEY=a0526afca34459ffeb4ddd52b1e5a6d6
+Environment=TMDB_API_KEY=换成你的key
 Environment=TMDB_PROXY=http://127.0.0.1:7897
 ```
 
+**获取 API Key**：注册 https://www.themoviedb.org → 设置 → API → 申请
+Developer API → 得到 API Key (v3)。
+
 **注意事项**：
+- ⚠️ key 不要写进任何入库文件（本仓库公开，历史提交里的 key 视为已泄露），
+  只放服务器/本机的 `manage/data/tmdb.json`（已 gitignore）或 systemd 环境变量。
+  若 key 已在公开场合泄露：去 TMDB 删除旧 key 重新生成，再更新本地 tmdb.json
 - `127.0.0.1:7897` 是本机代理端口；**服务器上需自己跑一个代理**（端口自定，
   改成服务器上实际的代理地址），或换成服务器可达的代理地址
 - TMDB 图床国内被墙：服务器在国内时代理必填，否则补图永远失败
   （仅影响缺图影片，有 12h 定时刷新，不用急）
 - 配好后可 `POST /api/catalog/backfill` 批量补历史缺图
-- api_key 已随文档入库，仓库若转为公开需换 key 并从历史清除
 
 ## 二、部署步骤
 
