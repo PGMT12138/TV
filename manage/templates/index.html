@@ -931,6 +931,7 @@
             <div class="header-left">
                 <h1>TV Management</h1>
                 <div class="header-sub">Config Control Panel</div>
+                <a href="downloads" style="display:inline-block;margin-top:10px;color:var(--accent);font-size:13px;text-decoration:none">下载与缓存管理 →</a>
             </div>
             <div class="tabs" id="desktopTabs">
                 <div class="tab active" data-type="0" onclick="switchTab(0)">VOD</div>
@@ -1015,6 +1016,10 @@
                 <div class="site-toolbar">
                     <button class="btn btn-sm btn-test" onclick="setAllSearchSites(false)">全部启用</button>
                     <button class="btn btn-sm btn-batch-del" onclick="setAllSearchSites(true)">全部禁用</button>
+                    <label class="site-sort-label" for="siteSource">来源</label>
+                    <select id="siteSource" onchange="renderSearchSites()">
+                        <option value="">全部来源</option>
+                    </select>
                     <label class="site-sort-label" for="siteSort">排序</label>
                     <select id="siteSort" onchange="renderSearchSites()">
                         <option value="default">默认排序</option>
@@ -1977,12 +1982,21 @@
         }
 
         let searchSites = [];
+        let searchSiteSources = [];
         async function loadSearchSites() {
             let data;
             try {
                 data = await (await fetch('api/search-sites')).json();
             } catch(e) { return; }
             searchSites = data.sites || [];
+            searchSiteSources = data.sources || [];
+            // 保留当前筛选：刷新/切页回来时不丢已选来源
+            const sel = document.getElementById('siteSource');
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">全部来源</option>'
+                + searchSiteSources.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('')
+                + '<option value="__none__">未知来源</option>';
+            if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
             renderSearchSites();
         }
 
@@ -1993,8 +2007,16 @@
                 list.innerHTML = '<div class="device-section-sub">暂无记录，视频网站发起搜索后会自动登记参与站点</div>';
                 return;
             }
+            const sourceFilter = document.getElementById('siteSource').value;
+            const filtered = sourceFilter
+                ? searchSites.filter(s => sourceFilter === '__none__' ? !s.source : s.source === sourceFilter)
+                : searchSites;
+            if (!filtered.length) {
+                list.innerHTML = `<div class="device-section-sub">${sourceFilter === '__none__' ? '没有来源未知的登记站点' : '该 VOD 源下暂无登记站点（源配置拉取失败或站点未被搜索过）'}</div>`;
+                return;
+            }
             const sort = document.getElementById('siteSort').value;
-            const sites = [...searchSites].sort((a, b) => {
+            const sites = [...filtered].sort((a, b) => {
                 if (sort !== 'default') {
                     const field = sort.startsWith('success') ? 'success_rate' : sort.startsWith('probe') ? 'probe_success_rate' : 'avg_probe_duration_ms';
                     // 无样本始终排在末尾，0% 和 0ms 都是有效统计值。
@@ -2017,6 +2039,7 @@
                         <div class="site-key" title="${esc(s.site_key)}">${esc(s.site_key)}</div>
                     </div></div>
                     <span class="site-kind${s.is_netdisk ? ' netdisk' : ''}" title="按站点名称自动识别，未识别不代表一定不是网盘">${s.is_netdisk ? '网盘 · 自动识别' : '未识别为网盘'}</span>
+                    <span class="site-kind" title="该站点所属 VOD 源（按当前启用中的源配置解析）">${esc(s.source || '未知来源')}</span>
                     <div class="site-metrics">
                         <div><div class="site-metric-label">搜索成功率</div><div class="site-metric-value">${s.success_rate == null ? '暂无数据' : s.success_rate.toFixed(1) + '%'}</div></div>
                         <div title="该站所有线路探测成功次数 ÷ 已完成探测次数，按次数加权；取消及旧耗时样本不计入"><div class="site-metric-label">平均探测成功率</div><div class="site-metric-value">${s.probe_success_rate == null ? '暂无数据' : s.probe_success_rate.toFixed(1) + '%'}</div></div>

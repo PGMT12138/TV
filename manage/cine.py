@@ -402,11 +402,12 @@ def _site_matches(site: dict, wd: str, vods: list) -> list[dict]:
     return matched
 
 
-async def _legacy_search_events(wd: str, preferred: str = ""):
+async def _legacy_search_events(wd: str, preferred: str = "", record: bool = True):
     """逐站实时搜索事件流：meta(站点总数) → site*(每站完成即出，无命中也发空列表供进度计数) → done。
     站点列表获取失败抛 RuntimeError，由消费方转成设备错误。"""
     sites = await _searchable_sites()
-    database.record_search_sites(sites)
+    if record:
+        database.record_search_sites(sites)
     disabled = database.get_disabled_site_keys()
     sites = [s for s in sites if s.get("key", "") not in disabled]
     if preferred:
@@ -418,6 +419,8 @@ async def _legacy_search_events(wd: str, preferred: str = ""):
     try:
         for fut in asyncio.as_completed(tasks):
             site, vods = await fut
+            if record:
+                database.record_search_site_result(site, not not _site_matches(site, wd, vods))
             yield {"type": "site", "siteKey": site.get("key", ""), "siteName": site.get("name", ""),
                    "matched": _site_matches(site, wd, vods)}
         yield {"type": "done", "searched": len(sites)}
@@ -428,7 +431,7 @@ async def _legacy_search_events(wd: str, preferred: str = ""):
                 t.cancel()
 
 
-async def _live_search_events(wd: str, preferred: str = ""):
+async def _live_search_events(wd: str, preferred: str = "", record: bool = True):
     """一次启动 App 端批量搜索，逐站接收结果；旧版 App 自动回退逐站命令。"""
     params = {
         "wd": wd,
@@ -442,7 +445,8 @@ async def _live_search_events(wd: str, preferred: str = ""):
             event_type = msg.get("type")
             if event_type == "meta":
                 available = msg.get("availableSites") or []
-                database.record_search_sites(available)
+                if record:
+                    database.record_search_sites(available)
                 yield {"type": "meta", "sites": int(msg.get("sites") or 0)}
             elif event_type == "site":
                 site = {
@@ -451,8 +455,9 @@ async def _live_search_events(wd: str, preferred: str = ""):
                 }
                 vods = (msg.get("data") or {}).get("list") or []
                 matched = _site_matches(site, wd, vods)
-                success = not msg.get("error") and not (msg.get("data") or {}).get("error") and bool(matched)
-                database.record_search_site_result(site, success)
+                if record:
+                    success = not msg.get("error") and not (msg.get("data") or {}).get("error") and bool(matched)
+                    database.record_search_site_result(site, success)
                 yield {
                     "type": "site",
                     "siteKey": site["key"],
@@ -465,14 +470,106 @@ async def _live_search_events(wd: str, preferred: str = ""):
         # 灰度发布时服务端可能先于 App 升级；旧 App 不认识 searchAll，保持原链路可用。
         if "unknown action searchAll" not in str(e):
             raise
-        async for event in _legacy_search_events(wd, preferred):
+        async for event in _legacy_search_events(wd, preferred, record=record):
             yield event
+
+
+_PUNCT_RE = re.compile(r"[·・，。！？：；、…—～~:;,.!?()（）\[\]【】《》〈〉«»\"'‘’“”\-_]")
+
+
+def _search_variants(wd: str) -> list[str]:
+    """派生搜索词变体，应对站点内搜不做标点/空格归一化的情况：
+    ① 原词；② 标点→空格（花儿与少年·丝路季 → 花儿与少年 丝路季）；
+    ③ 去标点（→ 花儿与少年丝路季）；④ 去空格（The Avengers → TheAvengers）。
+    去重保序返回，无标点无空格时仅原词一条。"""
+    variants = [wd]
+    if _PUNCT_RE.search(wd):
+        spaced = re.sub(r"\s+", " ", _PUNCT_RE.sub(" ", wd)).strip()
+        stripped = _PUNCT_RE.sub("", wd)
+        variants += [spaced, stripped]
+    if re.search(r"\s", wd):
+        variants.append(re.sub(r"\s+", "", wd))
+    seen, out = set(), []
+    for v in variants:
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+async def _multi_search_events(wd: str, preferred: str = ""):
+    """多变体并行搜索并按站点合并去重：同站点同资源（vodId 一致，无 id 时按标题）
+    只保留匹配分最高的一条。全部变体搜完该站点才推合并后的 site 事件，前端协议不变。
+    单个变体失败（如超时）不拖垮整场；全部失败才抛错。"""
+    variants = _search_variants(wd)
+    if len(variants) == 1:
+        async for ev in _live_search_events(wd, preferred):
+            yield ev
+        return
+    total = len(variants)
+    queue: asyncio.Queue = asyncio.Queue()
+    variant_done = object()
+
+    async def run_variant(v: str):
+        try:
+            async for ev in _live_search_events(v, preferred, record=False):
+                await queue.put(ev)
+        except Exception as e:
+            await queue.put(e)
+        finally:
+            await queue.put(variant_done)
+
+    tasks = [asyncio.ensure_future(run_variant(v)) for v in variants]
+    merged: dict[str, dict] = {}   # siteKey -> {siteName, byId: {资源键: match}}
+    reported: dict[str, int] = {}
+    errors: list[Exception] = []
+    done_count, meta_sent = 0, False
+    try:
+        while done_count < total:
+            item = await queue.get()
+            if item is variant_done:
+                done_count += 1
+                continue
+            if isinstance(item, Exception):
+                errors.append(item)
+                continue
+            etype = item.get("type")
+            if etype == "meta":
+                if not meta_sent:
+                    meta_sent = True
+                    yield {"type": "meta", "sites": int(item.get("sites") or 0)}
+            elif etype == "site":
+                key = item.get("siteKey", "")
+                reported[key] = reported.get(key, 0) + 1
+                slot = merged.setdefault(key, {"siteName": item.get("siteName", ""), "byId": {}})
+                for m in item.get("matched") or []:
+                    rid = m.get("vodId") or f"t:{m.get('title', '')}"
+                    old = slot["byId"].get(rid)
+                    if old is None or m.get("score", 0) > old.get("score", 0):
+                        slot["byId"][rid] = m
+                if reported[key] == total:  # 该站点全部变体搜完
+                    matched = sorted(slot["byId"].values(), key=lambda m: -m.get("score", 0))
+                    database.record_search_site_result({"key": key, "name": slot["siteName"]}, bool(matched))
+                    yield {"type": "site", "siteKey": key, "siteName": slot["siteName"], "matched": matched}
+        # 个别变体单站失败会缺报，补发这些站点的已归集结果
+        for key, slot in merged.items():
+            if reported.get(key, 0) < total:
+                matched = sorted(slot["byId"].values(), key=lambda m: -m.get("score", 0))
+                database.record_search_site_result({"key": key, "name": slot["siteName"]}, bool(matched))
+                yield {"type": "site", "siteKey": key, "siteName": slot["siteName"], "matched": matched}
+        if not merged and errors:
+            raise errors[-1]
+        yield {"type": "done", "searched": len(merged)}
+    finally:
+        for t in tasks:  # 消费方提前断开时逐变体取消，级联发 cancelSearch
+            if not t.done():
+                t.cancel()
 
 
 async def _do_live_search(wd: str) -> dict:
     """实时聚合搜索：收集全部站点结果（JSON 接口与后台重搜用，不流式）。"""
     matched, searched = [], 0
-    async for ev in _live_search_events(wd):
+    async for ev in _multi_search_events(wd):
         if ev["type"] == "site":
             matched.extend(ev["matched"])
         elif ev["type"] == "done":
@@ -585,7 +682,7 @@ async def resource_search_stream(wd: str, preferred: str = "", fresh: bool = Fal
             return
         matched, searched = [], 0
         try:
-            async for ev in _live_search_events(wd, preferred):
+            async for ev in _multi_search_events(wd, preferred):
                 if ev["type"] == "site":
                     matched.extend(ev["matched"])
                 elif ev["type"] == "done":

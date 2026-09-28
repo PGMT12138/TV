@@ -2,15 +2,26 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../api';
 import { Episode, ResourceState, ResourceFlag, ScanCandidateResult, scanResultKey } from '../types';
-import { INITIAL_SELECTION_WAIT_MS, initialCandidate, isMeaningfulUpgrade, qualifiedRecommendations, displayRecommendations } from '../utils/autoSelection';
+import { INITIAL_SELECTION_WAIT_MS, initialCandidate, isMeaningfulUpgrade, qualifiedRecommendations, displayRecommendations, standardDefinitionRecommendations } from '../utils/autoSelection';
 import { compareRecommended, fmtRes, isMobileDevice } from '../utils/scanFormat';
 import { referenceDurationSeconds } from '../utils/referenceDuration';
 import { prepareMedia, playbackHlsConfig, isFileMedia, missingFragment, gapNeedsHandoff, bufferedAhead, type WarmMedia } from '../utils/mediaHandoff';
 import { lockOrientation, unlockOrientation, type OrientationLock } from '../utils/orientation';
 import { getSessionLineFailure, markSessionLineFailure, useSessionLineFailures } from '../utils/sessionLineFailures';
 import { SourcePickerModal } from '../components/SourcePickerModal';
+import { DownloadPanel } from '../components/DownloadPanel';
+import type { DownloadConfig, DownloadSource } from '../downloadTypes';
 import { MetricBadges } from '../components/MetricBadges';
 import Hls, { type ErrorData } from 'hls.js';
+
+// 播放倍速档位（0.5 ~ 2.0），localStorage 记忆，换集/换源/刷新后保持
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+// 音量条上限：源站响度普遍偏低且 video.volume 上限 1.0，MSE 路径经 WebAudio
+// GainNode 把音量条扩展到 200%（>100% 部分为增益放大，过大可能削波爆音）；
+// 原生 HLS 路径（iPhone 等）不接管音频通道，上限保持 100%
+const VOLUME_CAP = Hls.isSupported() ? 2 : 1;
+
 import {
   Play,
   Pause,
@@ -35,7 +46,8 @@ import {
   Zap,
   Film,
   Signal,
-  Check
+  Check,
+  Gauge
 } from 'lucide-react';
 
 type PlayerResponse = Awaited<ReturnType<typeof api.player>>;
@@ -105,6 +117,17 @@ export const WatchView: React.FC = () => {
   const [buffering, setBuffering] = useState(false);  // 视频流缓冲中（起播/卡顿/拖进度条）
   const [bufferedEnd, setBufferedEnd] = useState(0);  // 当前播放位置对应的缓冲区末端（秒）
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadSource, setDownloadSource] = useState<DownloadSource>();
+  const [downloadConfig, setDownloadConfig] = useState<DownloadConfig>();
+  const closeDownloads = useCallback(() => setDownloadOpen(false), []);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => api.downloadConfig().then(value => { if (!cancelled) setDownloadConfig(value); }).catch(() => {});
+    void refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
   const [researching, setResearching] = useState(false);
   const [autoRecovering, setAutoRecovering] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState('');
@@ -173,10 +196,19 @@ export const WatchView: React.FC = () => {
   const [duration, setDuration] = useState(100);
   const [volume, setVolume] = useState(() => {
     const saved = parseFloat(localStorage.getItem('cine.volume') || '');
-    return Number.isFinite(saved) && saved > 0 ? Math.min(saved, 1) : 1; // 默认 100%，记忆上次音量
+    return Number.isFinite(saved) && saved > 0 ? Math.min(saved, VOLUME_CAP) : 1; // 默认 100%，记忆上次音量
   });
   const [isMuted, setIsMuted] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [playbackRate, setPlaybackRate] = useState(() => {
+    const saved = parseFloat(localStorage.getItem('cine.playbackRate') || '1');
+    return PLAYBACK_RATES.includes(saved) ? saved : 1;
+  });
+  const [rateMenuOpen, setRateMenuOpen] = useState(false);
+  // 音量增益链路（>100% 时接管音频通道）：双 video 槽位无绷换源，
+  // 每个元素只能绑一次 MediaElementSource，按槽位惰性接管；gain=1 时与直通等价
+  const volumeRef = useRef(volume);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodesRef = useRef<(GainNode | 'failed' | null)[]>([null, null]);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // 移动端防误触锁定：锁定后拦截播放器全部交互（暂停/进度/音量/控制栏），仅解锁按钮可点
@@ -668,7 +700,8 @@ export const WatchView: React.FC = () => {
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       setDuration(videoRef.current.duration || 100);
-      videoRef.current.volume = volume;
+      videoRef.current.volume = Math.min(volume, 1);
+      applyVolume(volume);
       videoRef.current.playbackRate = playbackRate;
       // 换源携带的播放位置（同片不同源内容一致，可安全跳转）
       const resume = resumeRef.current;
@@ -701,12 +734,9 @@ export const WatchView: React.FC = () => {
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setVolume(val);
+    setIsMuted(val === 0);
     if (val > 0) localStorage.setItem('cine.volume', String(val));
-    if (videoRef.current) {
-      videoRef.current.volume = val;
-      videoRef.current.muted = val === 0;
-      setIsMuted(val === 0);
-    }
+    applyVolume(val);
   };
 
   const handleToggleMute = () => {
@@ -718,7 +748,7 @@ export const WatchView: React.FC = () => {
       setIsMuted(false);
       if (video) {
         video.muted = false;
-        video.volume = restore;
+        applyVolume(restore);
       }
     } else {
       lastVolumeRef.current = volume;
@@ -729,11 +759,75 @@ export const WatchView: React.FC = () => {
 
   const handleRateChange = (rate: number) => {
     setPlaybackRate(rate);
+    localStorage.setItem('cine.playbackRate', String(rate));
     if (videoRef.current) {
       videoRef.current.playbackRate = rate;
     }
-    showToast(`倍速已调整为 ${rate}x`, 'info');
+    setRateMenuOpen(false);
+    showToast(rate === 1 ? '恢复正常速度' : `倍速已调整为 ${rate}x`, 'info');
   };
+
+  const stepRate = (dir: 1 | -1) => {
+    const idx = PLAYBACK_RATES.indexOf(playbackRate);
+    const base = idx < 0 ? PLAYBACK_RATES.indexOf(1) : idx;
+    const next = PLAYBACK_RATES[Math.min(PLAYBACK_RATES.length - 1, Math.max(0, base + dir))];
+    if (next !== playbackRate) handleRateChange(next);
+  };
+
+  // ---------------- 音量增益（WebAudio，>100% 生效） ----------------
+  const ensureSlotGain = (slot: number) => {
+    if (gainNodesRef.current[slot]) return gainNodesRef.current[slot];
+    const video = videoSlotsRef.current[slot];
+    if (!video || gainNodesRef.current[slot] === 'failed') return null;
+    try {
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        audioCtxRef.current = new AC();
+      }
+      const ctx = audioCtxRef.current!;
+      const source = ctx.createMediaElementSource(video);
+      const gain = ctx.createGain();
+      gain.gain.value = Math.max(volumeRef.current, 1);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      gainNodesRef.current[slot] = gain;
+      return gain;
+    } catch {
+      gainNodesRef.current[slot] = 'failed'; // 不支持时静默降级，音量回到 1.0 上限
+      return null;
+    }
+  };
+
+  // 统一应用音量：≤100% 走元素原生音量（增益置 1 等价直通）；
+  // >100% 元素满音量，超出部分由 GainNode 放大（拖动即用户手势，ctx 可直接运行）
+  const applyVolume = (v: number) => {
+    volumeRef.current = v;
+    if (videoRef.current) {
+      videoRef.current.volume = Math.min(v, 1);
+      videoRef.current.muted = v === 0; // 拖到 0 视为静音，调大声视为解除静音
+    }
+    if (v > 1) {
+      ensureSlotGain(activeSlotRef.current);
+      audioCtxRef.current?.resume().catch(() => {});
+    }
+    const ctx = audioCtxRef.current;
+    if (ctx) {
+      const g = Math.max(v, 1);
+      for (const node of gainNodesRef.current) {
+        if (node && node !== 'failed') node.gain.setTargetAtTime(g, ctx.currentTime, 0.05);
+      }
+    }
+  };
+
+  // 换槽位后音量 >100% 时接管新槽位音频通道（记忆值在首次播放时接管）
+  useEffect(() => {
+    if (volumeRef.current > 1) {
+      ensureSlotGain(activeSlot);
+      audioCtxRef.current?.resume().catch(() => {});
+    }
+  }, [activeSlot]);
+
+  useEffect(() => () => { audioCtxRef.current?.close().catch(() => {}); }, []);
 
   const [orientation, setOrientation] = useState<OrientationLock>('landscape');
 
@@ -821,6 +915,8 @@ export const WatchView: React.FC = () => {
   // 推荐卡片允许展示尚无片长核验信息的可用线路，严格升级条件只用于自动选择和升级提示。
   // 不排除当前线路——它排进前 3 时在卡片右侧标记已选择
   const topLines = displayRecommendations(selectableResults, refDurationS).slice(0, 3);
+  // 推荐位全是 2K/4K 时，下方补一组 ≤1080p 流畅备选（同一排序规则，剔除超高清线路）
+  const sdLines = standardDefinitionRecommendations(selectableResults, refDurationS);
   const bestUpgrade = qualifiedRecommendations(selectableResults, refDurationS)[0];
 
   // 手动选线/历史续播只提示，不自动接管；关闭后本轮不重复提示同一对线路。
@@ -1251,6 +1347,11 @@ export const WatchView: React.FC = () => {
     hasPlayedRef.current = true;
     setIsPlaying(!videoRef.current?.paused);
     setBuffering(false);
+    // 增益链路兜底：浏览器 autoplay 策略会挂起新建 AudioContext，播放恢复时确保运行
+    if (volumeRef.current > 1 && audioCtxRef.current) {
+      ensureSlotGain(activeSlotRef.current);
+      audioCtxRef.current.resume().catch(() => {});
+    }
     if (currentFailureRef.current?.video !== videoRef.current) {
       setAutoRecovering(false);
       setRecoveryPending('');
@@ -1308,11 +1409,8 @@ export const WatchView: React.FC = () => {
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setVolume((v) => {
-          const nv = Math.min(1, Math.round((v + 0.1) * 100) / 100);
-          if (videoRef.current) {
-            videoRef.current.volume = nv;
-            videoRef.current.muted = false; // 调大声视为解除静音
-          }
+          const nv = Math.min(VOLUME_CAP, Math.round((v + 0.1) * 100) / 100);
+          applyVolume(nv);
           if (nv > 0) localStorage.setItem('cine.volume', String(nv));
           setIsMuted(false);
           return nv;
@@ -1321,7 +1419,7 @@ export const WatchView: React.FC = () => {
         e.preventDefault();
         setVolume((v) => {
           const nv = Math.max(0, Math.round((v - 0.1) * 100) / 100);
-          if (videoRef.current) videoRef.current.volume = nv;
+          applyVolume(nv);
           if (nv > 0) localStorage.setItem('cine.volume', String(nv));
           setIsMuted(nv === 0);
           return nv;
@@ -1329,11 +1427,17 @@ export const WatchView: React.FC = () => {
       } else if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         handleToggleFullscreen();
+      } else if (e.key === '>' || e.key === '.') {
+        e.preventDefault();
+        stepRate(1);
+      } else if (e.key === '<' || e.key === ',') {
+        e.preventDefault();
+        stepRate(-1);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handlePlayPause, handleSkip, handleToggleFullscreen]);
+  }, [handlePlayPause, handleSkip, handleToggleFullscreen, playbackRate, stepRate]);
 
   function formatTime(secs: number) {
     if (isNaN(secs)) return '00:00';
@@ -1500,7 +1604,59 @@ export const WatchView: React.FC = () => {
     );
   }
 
+  // 推荐线路/流畅备选共用同一张线路卡片：primary=推荐分组（第 1 名标注综合最佳）
+  const renderLineCard = (r: ScanCandidateResult, i: number, primary: boolean) => {
+    const active = r.siteKey === selectedMatch?.siteKey && r.flag === activeLine?.flag;
+    const unavailable = lineFailure(r.siteKey, r.vodId, r.flag);
+    const loading = switchingTarget?.siteKey === r.siteKey && switchingTarget.flag === r.flag;
+    return (
+      <button
+        key={scanResultKey(r)}
+        disabled={!!unavailable || loading}
+        aria-busy={loading}
+        onClick={() => !active && !unavailable && applySource(r.siteKey, r.flag)}
+        title={unavailable ? `本次会话不可用：${r.siteName} · ${r.flag}（${unavailable.reason}）` : active ? `当前线路：${r.siteName} · ${r.flag}` : `切换到 ${r.siteName} · ${r.flag}${primary && i === 0 ? '（综合最佳）' : ''}`}
+        className={`flex items-center gap-2 px-2.5 py-2 rounded-xl border transition-colors text-left ${
+          unavailable ? 'bg-zinc-900/50 border-zinc-800 opacity-50 grayscale cursor-not-allowed' : active
+            ? 'bg-emerald-500/10 border-emerald-500/60 cursor-default'
+            : 'bg-zinc-800/50 border-zinc-700/70 hover:bg-zinc-700/50 hover:border-emerald-500/50'
+        }`}
+      >
+        <span className="flex-1 flex flex-col gap-1.5 min-w-0">
+          <span className="flex items-center gap-2 min-w-0">
+            <span
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black leading-none shrink-0 ${
+                primary && i === 0
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
+                  : 'bg-zinc-900 text-zinc-500 border border-zinc-700'
+              }`}
+            >
+              {i + 1}
+            </span>
+            <span className="text-xs font-semibold text-zinc-200 truncate">
+              {r.siteName}
+              <span className="text-zinc-500 font-normal"> · {r.flag}</span>
+            </span>
+          </span>
+          {unavailable ? <span className="text-[10px] text-zinc-400">本次会话不可用</span> : <MetricBadges metrics={r.metrics!} />}
+        </span>
+        {loading && <Loader2 role="status" aria-label="正在加载该线路" className="w-4 h-4 text-emerald-400 animate-spin shrink-0" />}
+        {active && !unavailable && !loading && (
+          <span
+            className="w-5 h-5 rounded-full bg-emerald-500 text-black flex items-center justify-center shrink-0"
+            title="当前播放线路"
+          >
+            <Check className="w-3 h-3" strokeWidth={3} />
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
+    // 弹窗挂在动画容器外：fadeInSlideBlur(forwards) 的 transform 会把容器变成
+    // fixed 后代的包含块，DownloadPanel/选源弹窗的 fixed inset-0 会以它为基准而无法全局居中
+    <>
     <div id="watch-view" className="space-y-6 pb-20 animate-fade-blur">
       {/* Top breadcrumb & back */}
       <div className="flex items-center justify-between">
@@ -1579,12 +1735,19 @@ export const WatchView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => showToast('离线缓存暂未开放', 'info')}
-                title="缓存"
+                onClick={() => {
+                  setDownloadSource(selectedMatch && activeLine && currentEpisode ? {
+                    movieId: movie.id, title: movie.title, siteKey: selectedMatch.siteKey,
+                    siteName: selectedMatch.siteName, vodId: selectedMatch.vodId, flag: activeLine.flag,
+                    episodeId: currentEpisode.id, episodeName: currentEpisode.title, episodeNumber: currentEpisode.number,
+                  } : undefined);
+                  setDownloadOpen(true);
+                }}
+                title={downloadConfig?.enabled === false ? '缓存已关闭，可查看已有下载' : '下载完整视频到本机'}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold whitespace-nowrap shrink-0 border border-zinc-700 transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>缓存</span>
+                <span>{downloadConfig?.enabled === false ? '下载记录' : '下载'}</span>
               </button>
             </div>
           </aside>
@@ -1788,19 +1951,21 @@ export const WatchView: React.FC = () => {
                     <input
                       type="range"
                       min={0}
-                      max={1}
+                      max={VOLUME_CAP}
                       step={0.01}
                       value={isMuted ? 0 : volume}
                       onChange={handleVolumeChange}
-                      className="volume-slider hidden sm:block h-1 rounded-lg appearance-none cursor-pointer opacity-70 transition-all duration-200 w-14 md:w-16"
+                      className="volume-slider hidden sm:block h-1 rounded-lg appearance-none cursor-pointer opacity-70 transition-all duration-200 w-20 md:w-24"
+                      title="音量（超 100% 为增益放大，过大可能爆音）"
                       style={{
-                        background: `linear-gradient(to right, #10b981 ${(isMuted ? 0 : volume) * 100}%, #3f3f46 ${(isMuted ? 0 : volume) * 100}%)`,
+                        background: `linear-gradient(to right, ${volume > 1 && !isMuted ? '#f59e0b' : '#10b981'} 0%, ${volume > 1 && !isMuted ? '#f59e0b' : '#10b981'} ${((isMuted ? 0 : volume) / VOLUME_CAP) * 100}%, #3f3f46 ${((isMuted ? 0 : volume) / VOLUME_CAP) * 100}%)`,
                       }}
                     />
-                    <span className="volume-pct hidden sm:block w-7 text-[10px] font-mono text-zinc-400 text-right tabular-nums opacity-0 transition-opacity duration-200">
+                    <span className={`volume-pct hidden sm:block w-8 text-[10px] font-mono text-right tabular-nums transition-opacity duration-200 ${volume > 1 && !isMuted ? 'text-amber-400 opacity-100' : 'text-zinc-400 opacity-0'}`}>
                       {Math.round((isMuted ? 0 : volume) * 100)}
                     </span>
                   </div>
+
 
                   {/* Time Code */}
                   <div className="text-[11px] sm:text-xs font-mono text-zinc-300 ml-0.5 sm:ml-1 whitespace-nowrap flex-shrink-0">
@@ -1812,6 +1977,37 @@ export const WatchView: React.FC = () => {
 
                 {/* Right controls */}
                 <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+                  {/* 倍速选择：档位弹层，非 1x 时高亮提示 */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setRateMenuOpen((v) => !v)}
+                      className={`px-1.5 py-1 sm:px-2 rounded-lg hover:bg-white/10 transition-colors text-[11px] sm:text-xs font-mono tabular-nums ${
+                        playbackRate !== 1 ? 'text-emerald-400' : 'text-zinc-300 hover:text-white'
+                      }`}
+                      title="播放倍速（. 加速 / , 减速）"
+                    >
+                      {playbackRate}x
+                    </button>
+                    {rateMenuOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setRateMenuOpen(false)} />
+                        <div className="absolute bottom-full right-0 mb-2 z-50 flex flex-col rounded-xl bg-zinc-900/95 backdrop-blur border border-zinc-700/60 shadow-2xl py-1 min-w-[76px]">
+                          {PLAYBACK_RATES.map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => handleRateChange(r)}
+                              className={`flex items-center justify-between gap-1.5 px-3 py-1.5 text-xs font-mono tabular-nums transition-colors ${
+                                r === playbackRate ? 'text-emerald-400 bg-white/5' : 'text-zinc-300 hover:text-white hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{r}x</span>
+                              {r === playbackRate && <Check className="w-3 h-3" strokeWidth={3} />}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                   {/* 屏幕旋转：仅移动端全屏时显示（Screen Orientation lock 只在全屏下生效） */}
                   {isMobileDevice() && isFullscreen && (
                     <button
@@ -1965,53 +2161,23 @@ export const WatchView: React.FC = () => {
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                  {topLines.map((r, i) => {
-                    const active = r.siteKey === selectedMatch?.siteKey && r.flag === activeLine?.flag;
-                    const unavailable = lineFailure(r.siteKey, r.vodId, r.flag);
-                    const loading = switchingTarget?.siteKey === r.siteKey && switchingTarget.flag === r.flag;
-                    return (
-                      <button
-                        key={scanResultKey(r)}
-                        disabled={!!unavailable || loading}
-                        aria-busy={loading}
-                        onClick={() => !active && !unavailable && applySource(r.siteKey, r.flag)}
-                        title={unavailable ? `本次会话不可用：${r.siteName} · ${r.flag}（${unavailable.reason}）` : active ? `当前线路：${r.siteName} · ${r.flag}` : `切换到 ${r.siteName} · ${r.flag}${i === 0 ? '（综合最佳）' : ''}`}
-                        className={`flex items-center gap-2 px-2.5 py-2 rounded-xl border transition-colors text-left ${
-                          unavailable ? 'bg-zinc-900/50 border-zinc-800 opacity-50 grayscale cursor-not-allowed' : active
-                            ? 'bg-emerald-500/10 border-emerald-500/60 cursor-default'
-                            : 'bg-zinc-800/50 border-zinc-700/70 hover:bg-zinc-700/50 hover:border-emerald-500/50'
-                        }`}
-                      >
-                        <span className="flex-1 flex flex-col gap-1.5 min-w-0">
-                          <span className="flex items-center gap-2 min-w-0">
-                            <span
-                              className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black leading-none shrink-0 ${
-                                i === 0
-                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
-                                  : 'bg-zinc-900 text-zinc-500 border border-zinc-700'
-                              }`}
-                            >
-                              {i + 1}
-                            </span>
-                            <span className="text-xs font-semibold text-zinc-200 truncate">
-                              {r.siteName}
-                              <span className="text-zinc-500 font-normal"> · {r.flag}</span>
-                            </span>
-                          </span>
-                          {unavailable ? <span className="text-[10px] text-zinc-400">本次会话不可用</span> : <MetricBadges metrics={r.metrics!} />}
-                        </span>
-                        {loading && <Loader2 role="status" aria-label="正在加载该线路" className="w-4 h-4 text-emerald-400 animate-spin shrink-0" />}
-                        {active && !unavailable && !loading && (
-                          <span
-                            className="w-5 h-5 rounded-full bg-emerald-500 text-black flex items-center justify-center shrink-0"
-                            title="当前播放线路"
-                          >
-                            <Check className="w-3 h-3" strokeWidth={3} />
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+                  {topLines.map((r, i) => renderLineCard(r, i, true))}
+                </div>
+              </div>
+            )}
+
+            {/* 流畅线路：推荐位全是 2K/4K 时展示 ≤1080p 备选（同一排序规则），网速差时可手选低清晰度 */}
+            {sdLines.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-zinc-200 min-w-0">
+                    <Gauge className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    流畅线路（≤1080p）
+                    <span className="text-[10px] font-normal text-zinc-500 truncate">网速一般时切换低清晰度，播放更流畅</span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                  {sdLines.map((r, i) => renderLineCard(r, i, false))}
                 </div>
               </div>
             )}
@@ -2053,37 +2219,39 @@ export const WatchView: React.FC = () => {
             )}
           </div>
       </div>
-
-      {/* 选源弹窗：未探测站点可批量/单站补测，推荐分组可批量重探 */}
-      <SourcePickerModal
-        open={sourceModalOpen}
-        onClose={() => setSourceModalOpen(false)}
-        scan={scan ? { ...scan, results: pickerResults } : undefined}
-        lineFailure={(siteKey, vodId, flag) => lineFailure(siteKey, vodId, flag)?.reason}
-        matches={resource?.matches || []}
-        isFeature={movie.type === 'movie' || movie.type === 'doc'}
-        selectedSiteKey={selectedMatch?.siteKey}
-        selectedFlag={activeLine?.flag}
-        researching={researching}
-        onResearch={handleResearch}
-        probingSites={probingSites}
-        onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
-        onProbeAllUnprobed={() => {
-          const probed = new Set((scan?.results || []).map((r) => r.siteKey));
-          const keys = [...new Set((resource?.matches || [])
-            .map((m) => m.siteKey)
-            .filter((key) => !probed.has(key)))];
-          if (keys.length) reprobeSites(movieId, keys);
-        }}
-        onReprobeRecommended={(keys) => {
-          if (keys.length) reprobeSites(movieId, keys);
-        }}
-        onReprobeSite={(siteKey) => reprobeSites(movieId, [siteKey])}
-        onSelect={(siteKey, flag) => {
-          setSourceModalOpen(false);
-          applySource(siteKey, flag);
-        }}
-      />
     </div>
+
+    {/* 选源/下载弹窗：置于动画容器之外，fixed 定位以视口为基准 */}
+    {downloadOpen && <DownloadPanel source={downloadSource} onClose={closeDownloads} onConfig={setDownloadConfig} />}
+    <SourcePickerModal
+      open={sourceModalOpen}
+      onClose={() => setSourceModalOpen(false)}
+      scan={scan ? { ...scan, results: pickerResults } : undefined}
+      lineFailure={(siteKey, vodId, flag) => lineFailure(siteKey, vodId, flag)?.reason}
+      matches={resource?.matches || []}
+      isFeature={movie.type === 'movie' || movie.type === 'doc'}
+      selectedSiteKey={selectedMatch?.siteKey}
+      selectedFlag={activeLine?.flag}
+      researching={researching}
+      onResearch={handleResearch}
+      probingSites={probingSites}
+      onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
+      onProbeAllUnprobed={() => {
+        const probed = new Set((scan?.results || []).map((r) => r.siteKey));
+        const keys = [...new Set((resource?.matches || [])
+          .map((m) => m.siteKey)
+          .filter((key) => !probed.has(key)))];
+        if (keys.length) reprobeSites(movieId, keys);
+      }}
+      onReprobeRecommended={(keys) => {
+        if (keys.length) reprobeSites(movieId, keys);
+      }}
+      onReprobeSite={(siteKey) => reprobeSites(movieId, [siteKey])}
+      onSelect={(siteKey, flag) => {
+        setSourceModalOpen(false);
+        applySource(siteKey, flag);
+      }}
+    />
+    </>
   );
 };

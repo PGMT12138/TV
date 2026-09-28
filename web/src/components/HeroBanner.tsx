@@ -80,8 +80,9 @@ export const HeroBanner: React.FC = () => {
       <div className="absolute inset-0 bg-gradient-to-t from-zinc-950/85 via-zinc-950/35 to-transparent" />
       <div className="absolute inset-0 bg-gradient-to-r from-zinc-950/80 via-zinc-950/45 to-transparent" />
 
-      {/* 标签与片名始终固定在左上角，不随下方信息区改变位置 */}
-      <div className="absolute z-10 top-5 left-5 right-5 sm:top-10 sm:left-10 sm:right-10 xl:top-14 xl:left-14 xl:right-14 text-left space-y-3.5 sm:space-y-5">
+      {/* 标签与片名始终固定在左上角，不随下方信息区改变位置。
+          z-20：下方操作区是 inset-0 的同层覆盖（z-10），靠后会盖住本块的收藏按钮 */}
+      <div className="absolute z-20 top-5 left-5 right-5 sm:top-10 sm:left-10 sm:right-10 xl:top-14 xl:left-14 xl:right-14 text-left space-y-3.5 sm:space-y-5">
         <div className="flex flex-wrap items-center justify-start gap-2 sm:gap-2.5">
           <span className="flex items-center gap-1.5 text-xs px-3 py-1 sm:px-3.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30 backdrop-blur-md">
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />

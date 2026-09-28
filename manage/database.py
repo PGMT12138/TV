@@ -384,6 +384,14 @@ def clean_search_cache(expire_before: float):
     conn.close()
 
 
+def get_url_type(row_id: int) -> int | None:
+    """单行取 type（配置变更推送时判定 vod/live 用）。"""
+    conn = get_conn()
+    row = conn.execute("SELECT type FROM urls WHERE id = ?", (row_id,)).fetchone()
+    conn.close()
+    return row["type"] if row else None
+
+
 def get_urls(url_type: int) -> list[dict]:
     conn = get_conn()
     rows = conn.execute(

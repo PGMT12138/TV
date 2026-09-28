@@ -4,6 +4,9 @@ import { hasReferenceDuration } from './referenceDuration';
 
 export const INITIAL_SELECTION_WAIT_MS = 12_000;
 
+/** 全高清高度上限：超过它（2K/4K）的线路在网速差时容易卡顿。 */
+export const FULL_HD_HEIGHT = 1080;
+
 function confirmedCompatibleCodec(codec?: string): boolean {
   if (!codec) return false;
   if (/^(h264|avc1|avc)(\.|$)/i.test(codec)) return true;
@@ -68,6 +71,21 @@ export function displayRecommendations(results: ScanCandidateResult[], refDurati
     }
   }
   return ranked;
+}
+
+/** 推荐位全是 2K/4K 高清线路时，网速差的用户需要低清晰度流畅备选：
+ *  沿用 displayRecommendations 的同一排序，剔除清晰度未知（height=0 无法确认码率档位）
+ *  与超过 1080p 的线路，取最多 3 条可用线路（速度门槛放宽到 >0：要低清晰度本来就是网慢）。 */
+export function standardDefinitionRecommendations(results: ScanCandidateResult[], refDurationS?: number): ScanCandidateResult[] {
+  const ranked = displayRecommendations(results, refDurationS);
+  const top = ranked.slice(0, 3);
+  if (!top.length || !top.every((r) => (r.metrics?.height || 0) > FULL_HD_HEIGHT)) return [];
+  const topKeys = new Set(top.map(scanResultKey));
+  return ranked
+    .filter((r) => !topKeys.has(scanResultKey(r))
+      && !!r.metrics?.height && r.metrics.height <= FULL_HD_HEIGHT
+      && meetsPlaybackRequirements(r, refDurationS, true))
+    .slice(0, 3);
 }
 
 /** 不为同清晰度的微小分数变动换线；明确异常/不可播/过慢时允许同清晰度修复。 */

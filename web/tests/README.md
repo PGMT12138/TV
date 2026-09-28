@@ -11,10 +11,22 @@ npm run test:selection
 
 执行 `npm run build` 后，设置 `CINE_UI_CHECK=1` 可额外加载生产 CSS，检查 320px 和 1280px 视口中的提示位置和按钮遮挡。`CINE_UI_SCREENSHOT_DIR` 可指定截图目录；`CINE_TEST_FILTER` 可按名称筛选播放页用例。
 
+`node tests/homeLoading.cjs` 验证首页片库加载态：真实 AppProvider + HomeView，仅替换 api 模块。覆盖 catalog/all 未返回时展示加载动画与提示、空片库与接口失败时展示空态提示且不卡加载态、轮播位收藏按钮不被简介操作区覆盖层挡住，以及详情/搜索等二级数据合并不冲掉轮播标记（幻灯片不缩水，isFeatured/isTrending OR 保留）。
+
+`node tests/profileDownloads.cjs` 验证用户信息弹窗的「下载管理」入口：点击后打开下载面板并渲染任务列表，关闭面板后回到用户信息弹窗。
+
+`node tests/downloadCentering.cjs` 验证播放页下载面板全局居中：面板须挂载在 `#watch-view`（animate-fade-blur 的 forwards transform 会成为 fixed 后代的包含块）之外，注入生产 CSS 后断言遮罩铺满视口、面板中心与视口中心对齐（滚动后仍成立）。
+
+`node tests/liveLoading.cjs` 验证直播页加载反馈：频道表（设备桥拉取）未返回时整页展示加载动画与提示；初始加载失败展示整页错误态，重试后恢复。切源中页面顶部有轻提示条。
+
+`node tests/sdRecommendations.cjs` 验证「流畅线路」备选组：推荐位全是 2K/4K 时按同一排序在下方补最多 3 条 ≤1080p 可用线路（清晰度未知、不可播排除，低速低清晰度保留）；推荐位已有 ≤1080p 时不展示。含真实 WatchView 渲染断言。
+
 覆盖首次进入等待 12 秒、初选兜底、中途/最终升级额度、成功确认、失败回退、手动操作、暂停/进度/选集保留，以及搜索和探测同时完成、补充扫描失败等生命周期边界。也验证手动选线/历史续播的更优线路提示、关闭去重、一键切换和失败重试。媒体播放由模拟事件驱动；真实解码能力和外部线路可用性仍取决于用户浏览器和站点。
 
 
 `npm run test:media` 使用真实 Chromium、hls.js 和浏览器解码器，另需 PATH 中有 ffmpeg（或通过 FFMPEG 指定可执行文件）。测试临时生成本地 H.264/AAC 视频及 HLS 分片，不请求真实影片，结束后删除临时媒体。
+
+`npm run test:downloads` 验证完整视频下载与管理端操作，需要先 `npm run build`，并准备 `manage/.venv`、Python 后端依赖和 ffmpeg/ffprobe。可通过 `CINE_PYTHON` 指定 Python。测试启动隔离的 FastAPI/SQLite，实际生成、保存和预览视频，验证缓存总开关、取消/重试、删除文件保留记录及 `/tv-manage` 前缀。`CINE_UI_SCREENSHOT_DIR` 可保存管理端和网站面板截图。配置和部署细节见 `docs/DOWNLOADS.md`。
 
 真实媒体回归覆盖 404/410 每分片最多一次重试、500 继续适度重试、当前进度附近分片验证、备用解码就绪后原实例交接、旧画面持续播放、未来缺片延迟交接、备用失败后尝试下一条、手动选择取消恢复任务、准备期间拖动/暂停/倍速同步，以及退出页面释放播放器。模拟事件测试仍负责 12 秒等待、升级额度和 10 秒提示等时序规则。
 

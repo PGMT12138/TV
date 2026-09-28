@@ -1,5 +1,8 @@
 // 后端（manage FastAPI）接口封装。同源部署（/cine 与 /api 同一服务），开发时由 vite 代理。
 import type { MovieItem, UserProfile, ResourceMatch, WatchHistoryItem, CatalogSection, LiveListData, LivePlayData, LiveEpgData, LiveFavoriteItem, LiveHistoryItem, LiveProbeResult, ScanCandidateResult } from './types';
+import type { DownloadTask, DownloadSource, DownloadConfig } from './downloadTypes';
+
+export const downloadBase = `${window.location.pathname.includes('/cine') ? window.location.pathname.split('/cine')[0] : ''}/api/downloads`;
 
 /** /api/resource/search/stream 的 SSE 事件。 */
 export interface SearchStreamEvent {
@@ -27,15 +30,21 @@ async function request<T = any>(url: string, options: RequestInit = {}): Promise
     data = {};
   }
   if (resp.status === 401) {
-    throw Object.assign(new Error(data.error || '未登录'), { status: 401 });
+    throw Object.assign(new Error(data.error || (typeof data.detail === 'string' && data.detail) || '未登录'), { status: 401 });
   }
   if (!resp.ok) {
-    throw Object.assign(new Error(data.error || `请求失败 (${resp.status})`), { status: resp.status });
+    throw Object.assign(new Error(data.error || (typeof data.detail === 'string' && data.detail) || `请求失败 (${resp.status})`), { status: resp.status });
   }
   return data as T;
 }
 
 export const api = {
+  downloadConfig: () => request<DownloadConfig>(`${downloadBase}/config`),
+  downloads: (offset = 0) => request<{ items: DownloadTask[]; total: number; enabled: boolean }>(`${downloadBase}?offset=${offset}`),
+  createDownload: (source: DownloadSource) => request<DownloadTask>(downloadBase, { method: 'POST', body: JSON.stringify(source) }),
+  cancelDownload: (id: string) => request<DownloadTask>(`${downloadBase}/${id}/cancel`, { method: 'POST' }),
+  retryDownload: (id: string) => request<DownloadTask>(`${downloadBase}/${id}/retry`, { method: 'POST' }),
+  deleteDownload: (id: string) => request<DownloadTask>(`${downloadBase}/${id}`, { method: 'DELETE' }),
   // ---- 认证 ----
   me: () => request<{ user: UserProfile | null }>('/api/auth/me'),
   login: (username: string, password: string) =>

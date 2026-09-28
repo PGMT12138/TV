@@ -24,7 +24,10 @@ export function MockProvider({children}) {
 }
 export const useApp=()=>useContext(C);
 `;
-const api = `export const api={
+const api = `export const downloadBase='/api/downloads'; export const api={
+ downloadConfig:async()=>({enabled:window.downloadEnabled!==false,available:true,retentionHours:24}),
+ downloads:async()=>({items:[],total:0,enabled:window.downloadEnabled!==false}),
+ createDownload:async source=>{(window.downloadRequests??=[]).push(source);return {};},
  siteDetail:async(key,id)=>({flags:[{flag:key,episodes:window.detailEpisodes?.[key]||[{name:'正片',url:key+'-episode'}]}]}),
  player:async(key,flag,id)=>{
   window.playerRequests.push(key);
@@ -536,6 +539,24 @@ if(require.main===module)(async()=>{
    await page.getByRole('status',{name:'正在加载该线路'}).waitFor();
    await page.evaluate(()=>{window.suppressPlaying=false;document.querySelector('video[data-active="true"]').dispatchEvent(new Event('playing'));});
    await page.waitForFunction(()=>!document.querySelector('[aria-label="正在加载该线路"]'));await clean(page);
+  });
+  await test('下载按钮按打开时的当前选集固定任务来源，后续换源不改变缓存目标',async()=>{
+   const page=await pageFor(fixture([origin],{initialAutoPlayPending:false,awaitScan:false}));await played(page,'origin');
+   await page.getByTitle('下载完整视频到本机').click();
+   await page.getByRole('dialog',{name:'影片下载'}).waitFor();
+   await page.evaluate(next=>window.updateResource({selected:next}),b);
+   await page.getByRole('button',{name:'缓存当前影片 / 集数'}).click();
+   const requests=await page.evaluate(()=>window.downloadRequests);
+   assert.equal(requests.length,1);assert.equal(requests[0].siteKey,'origin');assert.equal(requests[0].vodId,'origin-vod');
+   assert.equal(requests[0].flag,'origin');assert.equal(requests[0].episodeId,'origin-episode');assert.equal(requests[0].episodeNumber,1);
+   await page.getByRole('button',{name:'关闭下载面板'}).click();await clean(page);
+  });
+  await test('下载开关关闭后播放页保留记录入口，但面板禁止创建任务',async()=>{
+   const page=await pageFor(fixture([origin],{initialAutoPlayPending:false,awaitScan:false}));await played(page,'origin');
+   await page.evaluate(()=>window.downloadEnabled=false);await page.clock.runFor(5001);
+   await page.getByTitle('缓存已关闭，可查看已有下载').click();
+   assert.equal(await page.getByRole('button',{name:'缓存当前影片 / 集数'}).isDisabled(),true);
+   await clean(page);
   });
   console.log(count+' browser checks passed');
  } finally {await browser.close();}

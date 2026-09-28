@@ -774,8 +774,51 @@ export const LiveView: React.FC = () => {
     );
   };
 
+  // 初始加载（尚无频道表）：整页加载态，样式与首页一致。
+  // 频道表经设备桥拉取，冷缓存要几秒；此前这段页面只有播放器占位，看不出在加载
+  if (!data && loading && !loadError) {
+    return (
+      <div id="live-loading" className="flex flex-col items-center justify-center py-36 gap-5 animate-fade-in">
+        <div className="relative w-14 h-14">
+          <div className="absolute inset-0 rounded-full border-2 border-emerald-500/15" />
+          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
+        </div>
+        <div className="text-center space-y-1.5">
+          <p className="text-sm font-semibold text-zinc-200 font-sans-modern">正在加载直播源</p>
+          <p className="text-xs text-zinc-500 font-sans-modern">正在通过设备桥拉取频道表，首次加载可能需要几秒钟，请稍候</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 初始加载失败：整页错误态 + 重试（此前错误提示藏在频道下拉里，进页时根本看不到）
+  if (!data && loadError) {
+    return (
+      <div id="live-error" className="flex flex-col items-center justify-center py-36 gap-4 animate-fade-in">
+        <Tv className="w-10 h-10 text-zinc-700" />
+        <div className="text-center space-y-1.5">
+          <p className="text-sm font-semibold text-zinc-300 font-sans-modern">直播源加载失败</p>
+          <p className="text-xs text-zinc-500 font-sans-modern">{loadError}</p>
+        </div>
+        <button
+          onClick={() => loadList(activeLive)}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> 重试
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="animate-fade-in">
+      {/* 切源中：不卸载页面与播放器，顶部轻提示（初始加载由上方整页加载态覆盖） */}
+      {loading && (
+        <div className="flex items-center gap-2.5 mb-3 px-3.5 py-2 rounded-xl border border-emerald-600/40 bg-emerald-500/10 text-xs text-emerald-300">
+          <span className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin shrink-0" />
+          正在切换直播源，频道表加载中…
+        </div>
+      )}
       {/* 播放器上方行：直播源+设备状态 | 分组+探测 | 我的收藏 三个组合框（标题前缀说明清楚各项是什么；移动端各占整行，名称放得下） */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {/* 直播源 + 设备状态融合组合框：主体段开源下拉（标题前缀 + 分组数徽章），右段设备在线状态（与分组框探测段同构同宽）；移动端整行、桌面固定宽 */}

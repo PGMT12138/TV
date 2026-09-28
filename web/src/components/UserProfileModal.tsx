@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { DownloadPanel } from './DownloadPanel';
 import {
   LogOut,
   Clock,
   Calendar,
   X,
   User,
+  Download,
 } from 'lucide-react';
 
 interface UserProfileModalProps {
@@ -16,6 +18,9 @@ interface UserProfileModalProps {
 export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onClose }) => {
   const { currentUser, logout } = useApp();
   const [showConfirmLogout, setShowConfirmLogout] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  // 面板周期性回推服务端配置，播放页用它联动按钮状态；用户弹窗场景无消费方，忽略即可
+  const handleDownloadConfig = useCallback(() => {}, []);
 
   if (!isOpen || !currentUser) return null;
 
@@ -82,7 +87,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Logout Confirmation & Actions */}
-        <div className="pt-2 border-t border-zinc-800/80">
+        <div className="pt-2 border-t border-zinc-800/80 space-y-2">
+          <button
+            onClick={() => setDownloadsOpen(true)}
+            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-zinc-950 hover:bg-emerald-500/15 text-zinc-400 hover:text-emerald-300 border border-zinc-800 hover:border-emerald-500/40 text-xs font-semibold transition-all duration-200"
+          >
+            <Download className="w-4 h-4" />
+            <span>下载管理</span>
+          </button>
           {showConfirmLogout ? (
             <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-3">
               <p className="text-xs text-rose-300 font-medium text-center">
@@ -115,6 +127,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
           )}
         </div>
       </div>
+
+      {/* 下载管理弹窗：覆盖在用户信息之上（面板 z-[100]），关闭后回到用户信息 */}
+      {downloadsOpen && (
+        <DownloadPanel onClose={() => setDownloadsOpen(false)} onConfig={handleDownloadConfig} />
+      )}
     </div>
   );
 };

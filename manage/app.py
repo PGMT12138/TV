@@ -3,14 +3,16 @@ import json
 import time
 import re
 import base64
+import hashlib
 import httpx
 from urllib.parse import urlparse, parse_qs, unquote, quote, urljoin
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from database import (init_db, get_urls, get_all_urls, add_url, update_url, delete_url, delete_urls_batch,
+                      get_url_type,
                       get_app_version, set_app_version,
                       upsert_home_content, get_home_contents, get_home_content, delete_home_content,
                       delete_home_contents_batch,
@@ -23,7 +25,7 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 init_db()
 
 # 互联网版桥接：设备 WebSocket 通道 + 网页观看 API + 视频流代理
-from bridge import router as bridge_router
+from bridge import router as bridge_router, broadcast
 app.include_router(bridge_router)
 
 # CINE 视频站（/cine）：豆瓣片库缓存 + 用户收藏/历史 + 资源聚合
@@ -31,16 +33,20 @@ from catalog import router as catalog_router, start_refresh_loop
 from cine import router as cine_router
 app.include_router(catalog_router)
 app.include_router(cine_router)
+from downloads import router as downloads_router, manager as download_manager
+app.include_router(downloads_router)
 
 
 @app.on_event("startup")
 async def _startup():
     import asyncio
+    await download_manager.start()
     app.state.catalog_task = asyncio.get_event_loop().create_task(start_refresh_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown():
+    await download_manager.stop()
     task = getattr(app.state, "catalog_task", None)
     if task is not None:
         task.cancel()
@@ -97,6 +103,16 @@ async def list_urls(type: int):
     return {"urls": get_urls(type)}
 
 
+async def _notify_config_change(utype=None):
+    """URL 变更后推送在线设备动态重载配置；未知类型按 both 通知。
+    旧版 App 不认识该消息只会回一条无人消费的 unknown action，无副作用。"""
+    kind = {0: "vod", 1: "live"}.get(utype, "all")
+    try:
+        await broadcast({"type": "configChanged", "config": kind})
+    except Exception:
+        pass
+
+
 @app.get("/api/urls/all")
 async def list_all_urls(type: int):
     return {"urls": get_all_urls(type)}
@@ -104,18 +120,102 @@ async def list_all_urls(type: int):
 
 @app.post("/api/urls")
 async def create_url(item: UrlCreate):
-    return add_url(item.type, item.name, item.url, item.sort)
+    result = add_url(item.type, item.name, item.url, item.sort)
+    await _notify_config_change(item.type)
+    return result
 
 
 @app.put("/api/urls/{url_id}")
 async def modify_url(url_id: int, item: UrlUpdate):
-    return update_url(url_id, item.name, item.url, item.sort, item.enabled)
+    result = update_url(url_id, item.name, item.url, item.sort, item.enabled)
+    await _notify_config_change(get_url_type(url_id))
+    return result
 
 
 @app.delete("/api/urls/{url_id}")
 async def remove_url(url_id: int):
+    utype = get_url_type(url_id)
     delete_url(url_id)
+    await _notify_config_change(utype)
     return {"ok": True}
+
+
+# ---------------- 配置/jar 中转（设备网络到部分源站如 GitHub 不通，服务端可达） ----------------
+
+RELAY_CACHE_DIR = os.path.join(os.path.dirname(__file__), "data", "relay_cache")
+RELAY_CACHE_MAX = 512 * 1024 * 1024
+
+
+def _relay_rewrite_spider(value: str, base_url: str, request_base: str) -> str:
+    """spider/jar 串形如 'url;md5;...' 或纯相对路径：按原配置地址解析成绝对地址后，
+    统一改写为服务端中转地址，设备后续拉 jar 也走服务端。非 http 目标原样返回。"""
+    parts = (value or "").split(";")
+    target = parts[0].strip()
+    if not target.startswith(("http://", "https://")):
+        target = urljoin(base_url, target)
+        if not target.startswith(("http://", "https://")):
+            return value
+    parts[0] = f"{request_base}/api/relay?url={quote(target, safe='')}"
+    return ";".join(parts)
+
+
+def _relay_cache_trim():
+    try:
+        files = [(os.path.getmtime(os.path.join(RELAY_CACHE_DIR, f)), f)
+                 for f in os.listdir(RELAY_CACHE_DIR)]
+        total = sum(os.path.getsize(os.path.join(RELAY_CACHE_DIR, f)) for _, f in files)
+        for mtime, name in sorted(files):
+            if total <= RELAY_CACHE_MAX:
+                break
+            path = os.path.join(RELAY_CACHE_DIR, name)
+            total -= os.path.getsize(path)
+            os.remove(path)
+    except OSError:
+        pass
+
+
+@app.get("/api/relay")
+async def relay_download(request: Request, url: str):
+    """App 经管理服务端中转拉取 VOD/直播配置与 spider jar：模拟器等设备到 GitHub 等
+    源站常不通，服务端网络可达。JSON 配置内的 spider/jar 地址同步改写为中转地址；
+    jar 等二进制按 URL 落盘缓存（总量超限删最旧），App 重启不重复回源。"""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() in ("127.0.0.1", "localhost", "::1"):
+        return JSONResponse({"error": "不支持的地址"}, status_code=400)
+    request_base = str(request.base_url).rstrip("/")
+    cache_path = os.path.join(RELAY_CACHE_DIR, hashlib.md5(url.encode()).hexdigest())
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(10.0, read=60.0)) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            return JSONResponse({"error": f"源站返回 HTTP {resp.status_code}"}, status_code=502)
+        body = resp.content
+        ctype = resp.headers.get("content-type", "")
+        if body.lstrip()[:1] == b"{":
+            try:
+                data = json.loads(body)
+                if isinstance(data, dict):
+                    for key in ("spider", "spider1", "spider2"):
+                        if isinstance(data.get(key), str) and data[key]:
+                            data[key] = _relay_rewrite_spider(data[key], url, request_base)
+                    for site in data.get("sites") or []:
+                        if isinstance(site, dict) and isinstance(site.get("jar"), str) and site["jar"]:
+                            site["jar"] = _relay_rewrite_spider(site["jar"], url, request_base)
+                return Response(json.dumps(data, ensure_ascii=False).encode("utf-8"),
+                                media_type="application/json", headers={"Cache-Control": "no-store"})
+            except (ValueError, TypeError):
+                pass
+        if 0 < len(body) <= 128 * 1024 * 1024:
+            try:
+                os.makedirs(RELAY_CACHE_DIR, exist_ok=True)
+                with open(cache_path, "wb") as f:
+                    f.write(body)
+                _relay_cache_trim()
+            except OSError:
+                pass
+        return Response(body, media_type=ctype or "application/octet-stream")
+    except Exception as e:
+        return JSONResponse({"error": f"中转失败: {e}"}, status_code=502)
 
 
 def _strip_json_comments(text: str) -> str:
@@ -298,7 +398,9 @@ class BatchIds(BaseModel):
 
 @app.post("/api/urls/batch-delete")
 async def batch_remove_urls(item: BatchIds):
+    types = {t for t in (get_url_type(i) for i in item.ids) if t is not None}
     delete_urls_batch(item.ids)
+    await _notify_config_change(next(iter(types)) if len(types) == 1 else None)
     return {"ok": True, "deleted": len(item.ids)}
 
 

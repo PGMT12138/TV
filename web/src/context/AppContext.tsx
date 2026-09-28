@@ -192,8 +192,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           map.set(item.id, item);
           changed = true;
         } else {
-          // 用更完整的字段覆盖（详情补全后 cast/description 更全）
+          // 用更完整的字段覆盖（详情补全后 cast/description 更全）；
+          // 轮播标记 OR 保留：详情/搜索/收藏等二级接口不带标记，不能把 catalog/all 的置真冲掉
           const merged: MovieItem = { ...old, ...item, cast: item.cast?.length ? item.cast : old.cast, episodes: old.episodes };
+          merged.isFeatured = old.isFeatured || item.isFeatured;
+          merged.isTrending = old.isTrending || item.isTrending;
           map.set(item.id, merged);
           if (merged !== old) changed = true;
         }

@@ -18,12 +18,41 @@ import {
 } from 'lucide-react';
 
 export const HomeView: React.FC = () => {
-  const { navigateTo, watchHistory, movies, sections } = useApp();
+  const { navigateTo, watchHistory, movies, sections, catalogReady } = useApp();
   const [selectedGenreTab, setSelectedGenreTab] = useState('全部');
   const [activeSectionKey, setActiveSectionKey] = useState('hot_tv');
 
-  // 策展专栏：豆瓣榜单板块 Tab，每板块展示前 6 部
+  // 策展专栏：豆瓣榜单板块 Tab，每板块展示前 6 部（须在下方条件 return 之前，遵守 Hooks 规则）
   const movieById = React.useMemo(() => new Map(movies.map((m) => [m.id, m])), [movies]);
+
+  // 片库接口未返回前整页展示加载态（含首刷榜单、网络慢等场景）
+  if (!catalogReady) {
+    return (
+      <div id="home-loading" className="flex flex-col items-center justify-center py-36 gap-5 animate-fade-blur">
+        <div className="relative w-14 h-14">
+          <div className="absolute inset-0 rounded-full border-2 border-emerald-500/15" />
+          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
+        </div>
+        <div className="text-center space-y-1.5">
+          <p className="text-sm font-semibold text-zinc-200 font-sans-modern">正在加载推荐内容</p>
+          <p className="text-xs text-zinc-500 font-sans-modern">首次加载或榜单更新后可能需要几秒钟，请稍候</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 加载完成但片库为空（接口失败或空库）时给出可操作提示
+  if (movies.length === 0) {
+    return (
+      <div id="home-empty" className="flex flex-col items-center justify-center py-36 gap-4 animate-fade-blur">
+        <Film className="w-10 h-10 text-zinc-700" />
+        <div className="text-center space-y-1.5">
+          <p className="text-sm font-semibold text-zinc-300 font-sans-modern">片库还是空的</p>
+          <p className="text-xs text-zinc-500 font-sans-modern">请确认服务端已启动，然后刷新页面重试</p>
+        </div>
+      </div>
+    );
+  }
   const activeSection = sections.find((s) => s.key === activeSectionKey) || sections[0];
   const editorialMovies = (activeSection?.ids || [])
     .map((id) => movieById.get(id))

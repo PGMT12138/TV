@@ -452,8 +452,10 @@ def row_to_item(row: dict, ranking: int | None = None, featured: bool = False, t
         "episodes": [],
         "trailerVideoUrl": "",
         "accentColor": _accent(row["id"]),
-        "isFeatured": featured,
-        "isTrending": trending,
+        # isFeatured/isTrending 只在为真时输出：详情/搜索/收藏等二级接口若显式带 False，
+        # 前端 mergeMovies 展开合并会把 catalog/all 设置的轮播标记覆盖掉（幻灯片缩水）
+        **({"isFeatured": True} if featured else {}),
+        **({"isTrending": True} if trending else {}),
         "ranking": ranking if ranking is not None else 99,
         "source": row["source"],
     }
@@ -470,7 +472,8 @@ def row_to_item(row: dict, ranking: int | None = None, featured: bool = False, t
 
 @router.get("/api/catalog/all")
 async def catalog_all():
-    """全量片库。首次为空库时同步刷一次榜单（约 10s），之后 stale 数据直接返回并后台刷新。"""
+    """全量片库。首次为空库时同步刷一次榜单（约 10s），之后一律立即返回：过期数据直接
+    返回并后台刷新，轮播位简介缺漏也只后台补全，不阻塞首个访客的首页加载。"""
     conn = get_conn()
     count = conn.execute("SELECT COUNT(*) AS c FROM section_items").fetchone()["c"]
     conn.close()
@@ -512,8 +515,9 @@ async def catalog_all():
             seen.add(sid)
             hot.append(sid)
 
-    # 轮播位影片保证有简介：幻灯片切换时每部都要能展示剧情（缺的同步补全，热门位其余后台补）
-    await _ensure_hero_desc(rows, hot)
+    # 轮播位影片保证有简介：幻灯片切换时每部都要能展示剧情。补全只在后台进行，
+    # 本次响应先用库内现状，补完后下一次加载即可见
+    _schedule_hero_desc(rows, hot)
 
     items = [row_to_item(rows[sid], ranking=idx) for idx, sid in enumerate(ordered_ids) if sid in rows]
     featured_set = set(featured)
@@ -524,6 +528,16 @@ async def catalog_all():
             it["isTrending"] = True
     return {"list": items, "sections": section_meta,
             "updatedAt": datetime.now().isoformat(timespec="seconds")}
+
+
+def _schedule_hero_desc(rows: dict, hot: list[str]):
+    async def _safe():
+        try:
+            await _ensure_hero_desc(rows, hot)
+        except Exception as e:
+            print(f"[catalog] hero desc refresh failed: {e}", flush=True)
+
+    asyncio.get_event_loop().create_task(_safe())
 
 
 async def _ensure_hero_desc(rows: dict, hot: list[str]):
@@ -545,21 +559,11 @@ async def _ensure_hero_desc(rows: dict, hot: list[str]):
             except Exception:
                 return False
 
-    # 前 8 部（幻灯片位）本次请求内补完，其余排后台
-    results = await asyncio.gather(*[one(sid) for sid in missing[:8]])
-    for sid, ok in zip(missing[:8], results):
+    results = await asyncio.gather(*[one(sid) for sid in missing])
+    for sid, ok in zip(missing, results):
         if not ok:
             # 被限流等失败：10 分钟后即可重试（而不是等 24h）
             _desc_tried[sid] = now - DESC_RETRY_AFTER + 600
-    if len(missing) > 8:
-        for sid in missing[8:]:
-            asyncio.get_event_loop().create_task(one(sid))
-    conn = get_conn()
-    for sid in missing[:8]:
-        row = conn.execute("SELECT * FROM subjects WHERE id = ?", (sid,)).fetchone()
-        if row is not None:
-            rows[sid] = dict(row)
-    conn.close()
 
 
 @router.get("/api/catalog/detail")

@@ -15,8 +15,10 @@ import base64
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
+import time
 from collections import OrderedDict
 from http import HTTPStatus
 from urllib.parse import quote, urljoin, urlparse
@@ -115,6 +117,7 @@ class Device:
         self.ws = None
         self.name = "device"
         self.version = ""
+        self.fetch_flow = False
         self.pending: dict[int, asyncio.Future] = {}
         self.streams: dict[int, asyncio.Queue] = {}
         self.events: dict[int, asyncio.Queue] = {}
@@ -136,6 +139,22 @@ class Device:
         self.events.clear()
         self.ws = None
 
+    async def send_json(self, payload: dict):
+        """向设备连接发送 JSON。连接半死（对端已断开但 receive 循环尚未感知）时，
+        starlette 的 WebSocket 会在一次失败的 send 后内部标记 DISCONNECTED，之后
+        所有 send 都抛 'Cannot call "send" once a close message has been sent.'。
+        这里统一视为设备离线：立即注销连接并唤醒全部等待方，让上层走
+        设备未连接 / 等待重连逻辑，而不是把引擎内部异常透传给前端。"""
+        ws = self.ws
+        if ws is not None:
+            try:
+                await ws.send_json(payload)
+                return
+            except Exception:
+                pass
+        await self.close()
+        raise RuntimeError("设备未连接")
+
 
 # 在线设备注册表（id -> Device）；历史设备见 devices 表
 _devices: dict[str, Device] = {}
@@ -147,6 +166,17 @@ def active_device() -> Device | None:
     if not device_id:
         return None
     return _devices.get(device_id)
+
+
+async def broadcast(payload: dict):
+    """向全部在线设备推送控制消息（无请求 id，设备按 type 字段处理，无需回包）。
+    走 send_json 统一入口，半死连接会被就地注销而不影响其余设备。"""
+    for dev in list(_devices.values()):
+        if dev.online:
+            try:
+                await dev.send_json(payload)
+            except Exception:
+                pass
 
 
 def _clear_sites_cache():
@@ -191,6 +221,7 @@ async def device_ws(ws: WebSocket):
     dev.ws = ws
     dev.name = name
     dev.version = version
+    dev.fetch_flow = hello.get("fetchFlow") is True
     if replaced is not None and replaced is not ws:  # 同设备重连，踢掉旧连接
         try:
             await replaced.close(code=4000, reason="replaced")
@@ -212,11 +243,14 @@ async def device_ws(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        if dev.ws is ws:  # 仍是本连接持有设备时才注销（旧连接被替换时不清理）
+        # dev.ws is None：send 失败路径已注销连接，同样需要移除注册；
+        # await close() 让出控制权期间若有新连接注册（dev.ws 被改写）则不动注册表。
+        if dev.ws is ws or dev.ws is None:
             await dev.close()
-            _devices.pop(device_id, None)
-            database.touch_device(device_id)
-            print(f"[bridge] device disconnected: {name} ({device_id[:8]})", flush=True)
+            if _devices.get(device_id) is dev and dev.ws is None:
+                _devices.pop(device_id, None)
+                database.touch_device(device_id)
+                print(f"[bridge] device disconnected: {name} ({device_id[:8]})", flush=True)
 
 
 def _on_device_text(dev: Device, msg: dict):
@@ -247,16 +281,23 @@ def _on_device_bytes(dev: Device, data: bytes):
         q.put_nowait(data[4:])
 
 
-async def call_device(action: str, params: dict, timeout: float = TIMEOUT_CMD) -> dict:
-    dev = active_device()
+async def call_device(action: str, params: dict, timeout: float = TIMEOUT_CMD, *, device_id: str | None = None) -> dict:
+    dev = _devices.get(device_id) if device_id is not None else active_device()
     if dev is None or not dev.online:
         raise RuntimeError("设备未连接")
     rid = next(_ids)
     fut = asyncio.get_event_loop().create_future()
     dev.pending[rid] = fut
     try:
-        await dev.ws.send_json({"id": rid, "action": action, "params": params})
+        await dev.send_json({"id": rid, "action": action, "params": params})
         return await asyncio.wait_for(fut, timeout)
+    except Exception:
+        # send 失败会触发 dev.close() 给 future 置异常，这里消费掉避免 asyncio 未检索告警
+        if fut.done() and not fut.cancelled():
+            fut.exception()
+        elif not fut.done():
+            fut.cancel()
+        raise
     finally:
         dev.pending.pop(rid, None)
 
@@ -274,7 +315,7 @@ async def stream_device_events(action: str, params: dict, idle_timeout: float = 
     dev.events[rid] = q
     finished = False
     try:
-        await dev.ws.send_json({"id": rid, "action": action, "params": params})
+        await dev.send_json({"id": rid, "action": action, "params": params})
         while True:
             try:
                 msg = await asyncio.wait_for(q.get(), idle_timeout)
@@ -556,7 +597,7 @@ async def _stream_via_device(request: Request, url: str, headers: dict, h: str):
     q: asyncio.Queue = asyncio.Queue()
     dev.streams[rid] = q
     try:
-        await dev.ws.send_json({"id": rid, "action": "fetch", "params": {"url": url, "headers": headers}})
+        await dev.send_json({"id": rid, "action": "fetch", "params": {"url": url, "headers": headers}})
         meta = await asyncio.wait_for(q.get(), timeout=TIMEOUT_CMD)
         if not isinstance(meta, dict) or meta.get("type") != "meta":
             raise RuntimeError(meta.get("error", "设备取流失败") if isinstance(meta, dict) else "设备取流失败")
@@ -721,7 +762,71 @@ async def api_select_device(body: SelectBody):
 
 @router.get("/api/search-sites")
 async def api_search_sites():
-    return {"sites": database.list_search_sites()}
+    mapping, sources = await _vod_site_sources()
+    sites = database.list_search_sites()
+    for site in sites:
+        site["source"] = mapping.get(site["site_key"])
+    return {"sites": sites, "sources": sources}
+
+
+# ---------------- 站点 → VOD 源归属（管理端展示/筛选用） ----------------
+
+_SITE_SOURCES_TTL = 600  # 源配置不常变，10 分钟缓存避免每次打开管理页都回源
+_site_sources_cache: tuple[float, dict] | None = None
+
+
+def _strip_config_comments(text: str) -> str:
+    """与 app.py 同款：剥掉准 JSON 配置里的 // 注释与尾逗号。"""
+    cleaned = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("//"):
+            continue
+        in_string = escape = False
+        result = []
+        for i, ch in enumerate(line):
+            if escape:
+                result.append(ch)
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                result.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                result.append(ch)
+                continue
+            if not in_string and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+                break
+            result.append(ch)
+        cleaned.append("".join(result))
+    return re.sub(r",\s*([}\]])", r"\1", "\n".join(cleaned))
+
+
+async def _vod_site_sources() -> tuple[dict[str, str], list[dict]]:
+    """解析启用中的 VOD 源配置，返回 (站点key→源名, 源列表)。
+    多源同 key 站点按 App 合并口径取后加载的源（get_urls 的 sort/id 顺序与 App 处理顺序一致）。"""
+    global _site_sources_cache
+    now = time.monotonic()
+    if _site_sources_cache and now - _site_sources_cache[0] < _SITE_SOURCES_TTL:
+        return _site_sources_cache[1]
+    urls = database.get_urls(0)
+    mapping: dict[str, str] = {}
+    sources = [{"id": item["id"], "name": item.get("name") or item["url"]} for item in urls]
+    async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(10.0, read=30.0)) as client:
+        for item in urls:
+            try:
+                resp = await client.get(item["url"])
+                data = json.loads(_strip_config_comments(resp.text), strict=False)
+                for site in data.get("sites") or []:
+                    if site.get("key"):
+                        mapping[site["key"]] = item.get("name") or item["url"]
+            except Exception:
+                continue  # 单个源拉取/解析失败不影响其它源的归属展示
+    result = (mapping, sources)
+    _site_sources_cache = (now, result)
+    return result
 
 
 @router.post("/api/search-sites/set")

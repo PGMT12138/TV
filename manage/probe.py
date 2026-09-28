@@ -150,6 +150,28 @@ def _http_client() -> httpx.AsyncClient:
     return _client
 
 
+def _recycle_http_client():
+    """超时后废弃全局客户端：疑似连接池被中途取消的探测占满时（表现为整轮扫描全部
+    空消息 12s 超时）重建池子即可恢复，无需重启进程。立即换新引用，旧客户端延迟关闭
+    （给仍在飞行的请求留出收尾时间，强关会打断它们的 finally 清理）。"""
+    global _client
+    client, _client = _client, None
+    if client is None or client.is_closed:
+        return
+
+    async def close_later():
+        await asyncio.sleep(30)
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+    try:
+        asyncio.get_event_loop().create_task(close_later())
+    except RuntimeError:
+        pass
+
+
 async def _fetch(url: str, headers: dict, cap: int, local: bool = False,
                  timeout: float = FETCH_TIMEOUT) -> dict:
     """有界下载，客户端读满 cap 即断开。返回 {status, ctype, data, ttfb, elapsed, redirects, url}，
@@ -166,7 +188,7 @@ async def _fetch(url: str, headers: dict, cap: int, local: bool = False,
         dev.streams[rid] = q
         try:
             t0 = time.monotonic()
-            await dev.ws.send_json({"id": rid, "action": "fetch", "params": {
+            await dev.send_json({"id": rid, "action": "fetch", "params": {
                 "url": url, "headers": headers,
                 "range": f"bytes=0-{cap - 1}" if cap else ""}})
             meta = await asyncio.wait_for(q.get(), timeout=timeout)
@@ -190,7 +212,13 @@ async def _fetch(url: str, headers: dict, cap: int, local: bool = False,
             dev.streams.pop(rid, None)
     client = _http_client()
     t0 = time.monotonic()
-    resp = await client.send(client.build_request("GET", url, headers=dict(headers)), stream=True)
+    request = client.build_request("GET", url, headers=dict(headers))
+    try:
+        resp = await client.send(request, stream=True)
+    except (httpx.ConnectTimeout, httpx.PoolTimeout):
+        # 连接建立就超时：多半是全局池被占满或网络栈卡住，换新池自愈；异常如实带类型上报
+        _recycle_http_client()
+        raise
     try:
         ttfb = time.monotonic() - t0
         parts, total = [], 0
@@ -593,7 +621,9 @@ async def _probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
         pl = await _fetch(url, headers, PLAYLIST_CAP, local=local)
     except Exception as e:
         _stats_insert(site_key, False, "", None, None)
-        return _fail(cand, f"取流失败: {e}")
+        # httpx 超时异常常带空消息（如 PoolTimeout()），只写类型也能从结果里分辨退化原因
+        detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        return _fail(cand, f"取流失败: {detail}")
     if pl["status"] >= 400:
         _stats_insert(site_key, False, "", None, None)
         return _fail(cand, f"源站返回 HTTP {pl['status']}")

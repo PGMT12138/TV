@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '..');
     '-g','50','-sc_threshold','0','-c:a','aac','-movflags','+faststart',path.join(temp,'clip.mp4')], { windowsHide:true });
   execFileSync(process.env.FFMPEG || 'ffmpeg', ['-hide_banner','-loglevel','error','-i',path.join(temp,'clip.mp4'),'-c','copy',
     '-hls_time','2','-hls_list_size','0','-hls_segment_filename',path.join(temp,'seg%d.ts'),path.join(temp,'index.m3u8')], { windowsHide:true });
-  const api = `export const api={siteDetail:async key=>({flags:[{flag:key,episodes:[{name:'正片',url:key+'-episode'}]}]}),
+  const api = `export const downloadBase='/api/downloads'; export const api={downloadConfig:async()=>({enabled:true,available:true,retentionHours:24}),siteDetail:async key=>({flags:[{flag:key,episodes:[{name:'正片',url:key+'-episode'}]}]}),
     player:async key=>{window.playerRequests.push(key);return {play:location.origin+'/media/'+key+'/index.m3u8'};}};`;
   const bundle = await esbuild.build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';
     import {WatchView} from './src/views/WatchView';import {MockProvider} from './src/context/AppContext';

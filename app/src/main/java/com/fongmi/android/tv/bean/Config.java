@@ -104,6 +104,18 @@ public class Config {
         return item == null ? create(3) : item;
     }
 
+    /** 管理端聚合接口地址（type=0 vod / 1 live）：manage 地址带 ? 视为已含 api/urls 路径（取问号前），
+     * 裸地址补 api/urls。HomeActivity/Setting/Bridge 动态重载共用同一口径。 */
+    public static String manageApi(int type) {
+        Config manage = manage();
+        if (manage.isEmpty()) return "";
+        String url = manage.getUrl();
+        int idx = url.indexOf("?");
+        if (idx >= 0) url = url.substring(0, idx);
+        else url = url + (url.endsWith("/") ? "" : "/") + "api/urls";
+        return url + "?type=" + type;
+    }
+
     public static Config find(int id) {
         return AppDatabase.get().getConfigDao().findById(id);
     }

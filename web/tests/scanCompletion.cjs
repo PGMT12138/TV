@@ -4,7 +4,8 @@ const path = require('node:path');
 const esbuild = require('esbuild');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
-const api = `export const api={
+const api = `export const downloadBase='/api/downloads'; export const api={
+ downloadConfig:async()=>({enabled:true,available:true,retentionHours:24}),
  me:async()=>({user:null}),catalogAll:async()=>({list:[]}),deviceStatus:async()=>({online:true}),
  resourceScan:async(candidates,duration,full,prior)=>{
   window.scanCalls.push({candidates,duration,prior});

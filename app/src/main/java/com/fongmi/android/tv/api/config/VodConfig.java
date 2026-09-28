@@ -131,6 +131,19 @@ public class VodConfig extends BaseConfig {
         callback.start();
     }
 
+    /** 设备网络到部分源站（如 GitHub）不通，http(s) 配置统一改经管理服务端中转拉取；
+     *  中转端会把配置内 spider jar 地址一并改写。其它协议（clan/base64 等）保持原样。 */
+    private static String relayUrl(String manageUrl, String url) {
+        if (url == null || !url.startsWith("http")) return url;
+        int idx = manageUrl.indexOf("/api/");
+        String base = idx > 0 ? manageUrl.substring(0, idx) : manageUrl;
+        try {
+            return base + "/api/relay?url=" + java.net.URLEncoder.encode(url, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            return url;
+        }
+    }
+
     private void loadFromManageConfig(int id, String manageUrl, Callback callback) {
         try {
             Server.get().start();
@@ -155,7 +168,7 @@ public class VodConfig extends BaseConfig {
                 String url = urlObj.get("url").getAsString();
                 String urlName = urlObj.has("name") ? urlObj.get("name").getAsString() : url;
                 try {
-                    String configJson = Decoder.getJson(UrlUtil.convert(url), TAG);
+                    String configJson = Decoder.getJson(UrlUtil.convert(relayUrl(manageUrl, url)), TAG);
                     JsonObject object = Json.parse(configJson).getAsJsonObject();
                     if (object.has("msg")) continue;
                     if (object.has("urls")) continue;
