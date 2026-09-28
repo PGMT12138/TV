@@ -44,31 +44,33 @@ app/build/outputs/apk/  # 如需 /apk/ 下载页
 | `DOWNLOAD_ALLOWED_HOSTS` | 公网清单模式下允许设备取流的目标 host 白名单（逗号分隔） | 空（不限制） |
 | `FFMPEG` / `FFPROBE` | 可执行文件路径覆盖（默认 PATH 里找，装了系统包不用设） | 自动探测 |
 
-### TMDB 图床兜底配置（推荐）
+### TMDB 图床兜底配置（已配置，迁移时投照搬）
 
 豆瓣图片缺失时用 TMDB 补背景图/海报；不配则部分影片无图，不影响功能。
-
-**获取 API Key**：
-1. 注册 https://www.themoviedb.org 账号
-2. 设置 → API → 申请 Developer API（选 Developer）→ 得到 **API Key (v3)**
-
-**两种配置方式（环境变量优先于文件）**：
+本机已有可用配置，两种方式二选一（环境变量优先于文件）：
 
 ```bash
-# 方式一：systemd 环境变量（编辑 /etc/systemd/system/tv-manage.service 加）
-[Service]
-Environment=TMDB_API_KEY=你的key
-Environment=TMDB_PROXY=http://127.0.0.1:7890   # 国内服务器才需要
-
-# 方式二：配置文件（更简单，不用改 systemd）
+# 方式一：配置文件（推荐，和本机一致，直接拷贝）
+# 迁移时把本机 manage/data/tmdb.json 原样拷到服务器同路径即可，内容：
 cat > /opt/TV/manage/data/tmdb.json << 'EOF'
-{"api_key": "你的key", "proxy": ""}
+{
+  "api_key": "a0526afca34459ffeb4ddd52b1e5a6d6",
+  "proxy": "http://127.0.0.1:7897"
+}
 EOF
+
+# 方式二：systemd 环境变量（编辑 /etc/systemd/system/tv-manage.service 的 [Service] 段）
+Environment=TMDB_API_KEY=a0526afca34459ffeb4ddd52b1e5a6d6
+Environment=TMDB_PROXY=http://127.0.0.1:7897
 ```
 
-> TMDB 图床国内被墙：服务器在国内时 TMDB_PROXY 必填（指向可用代理），
-> 否则补图永远失败（仅影响缺图影片，有 12h 定时刷新，不用急）。
-> 配好后可 `POST /api/catalog/backfill` 批量补历史缺图。
+**注意事项**：
+- `127.0.0.1:7897` 是本机代理端口；**服务器上需自己跑一个代理**（端口自定，
+  改成服务器上实际的代理地址），或换成服务器可达的代理地址
+- TMDB 图床国内被墙：服务器在国内时代理必填，否则补图永远失败
+  （仅影响缺图影片，有 12h 定时刷新，不用急）
+- 配好后可 `POST /api/catalog/backfill` 批量补历史缺图
+- api_key 已随文档入库，仓库若转为公开需换 key 并从历史清除
 
 ## 二、部署步骤
 
