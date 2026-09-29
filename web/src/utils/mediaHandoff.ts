@@ -26,7 +26,8 @@ export function isFileMedia(source: { play?: string; url?: string }, kind?: stri
 }
 
 export function missingFragment(data: ErrorData, attempts: Map<string, number>): { url: string; start: number } | undefined {
-  if (data.details !== Hls.ErrorDetails.FRAG_LOAD_ERROR || ![404, 410].includes(data.response?.code || 0)) return;
+  // 403 一并计入：mgtv 等 CDN 分片签名过期回 403（对象清理后回 404），同属分片失效
+  if (data.details !== Hls.ErrorDetails.FRAG_LOAD_ERROR || ![403, 404, 410].includes(data.response?.code || 0)) return;
   const url = data.frag?.url || data.response?.url || '';
   const count = (attempts.get(url) || 0) + 1;
   attempts.set(url, count);

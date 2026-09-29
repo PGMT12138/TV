@@ -1307,15 +1307,49 @@ export const WatchView: React.FC = () => {
   };
   autoRecoverRef.current = autoRecover;
 
+  // 同线续期：mgtv 等线路的 CDN 分片签名短命（VOD 列表起播时加载一次、内嵌全部分片
+  // token），播到后段过期 403/404。此时线路本身是健康的——重新解析一次即得新 token，
+  // 按当前进度原线续播优于换线。两分钟内连续两次续期仍快速失效（真死线/极短命 token）
+  // 则不再续期，交给 autoRecover 换线，避免续期风暴。
+  const lineRefreshRef = useRef<{ key: string; at: number; streak: number }>({ key: '', at: 0, streak: 0 });
+  const lineRefreshBusyRef = useRef(false);
+  const refreshCurrentLine = (): boolean => {
+    const sel = latestSelectionRef.current;
+    const resource = sel.resource;
+    const line = resource?.flags?.[resource.activeFlagIndex ?? 0] || resource?.flags?.[0];
+    if (!resource?.selected || !line || !sel.currentEpisode) return false;
+    const key = `${resource.selected.siteKey}::${line.flag}`;
+    const s = lineRefreshRef.current;
+    const now = Date.now();
+    if (s.key === key && now - s.at < 30_000) return false;                   // 防抖
+    if (s.key === key && s.streak >= 2 && now - s.at < 120_000) return false; // 短时间连环失效：换线
+    lineRefreshRef.current = {
+      key, at: now,
+      streak: s.key === key && now - s.at < 120_000 ? s.streak + 1 : 1,      // 距上次续期>2min 视为新失效
+    };
+    lineRefreshBusyRef.current = true;
+    window.setTimeout(() => { lineRefreshBusyRef.current = false; }, 30_000);
+    resumeRef.current = videoRef.current?.currentTime || resumeRef.current;
+    keepPausedRef.current = hasPlayedRef.current && (keepPausedRef.current || !!videoRef.current?.paused);
+    preparedPlayerRef.current = undefined; // 清缓存：重挂必须重新走 api.player 拿新地址
+    setPlayerError('');
+    setPlayNonce((n) => n + 1);
+    showToast('线路分片令牌已过期，正在续期当前线路…', 'info');
+    return true;
+  };
+
   activeHlsErrorRef.current = (hls, video, data, missing) => {
     if (hlsRef.current !== hls || videoRef.current !== video) return;
-    const missingStatus = data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR && [404, 410].includes(data.response?.code || 0);
-    if (missingStatus && !missing) return; // 首次失败留一次重试，第二次开始准备备用。
+    if (lineRefreshBusyRef.current) return; // 续期重挂中，旧实例的后续错误静默丢弃
+    const missingStatus = data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR && [403, 404, 410].includes(data.response?.code || 0);
+    if (missingStatus && !missing) return; // 首次失败留一次重试，第二次开始恢复。
     if (!missing && !data.fatal) return;
     if (currentFailureRef.current?.video === video) return; // 同一故障的后续 fatal 事件不覆盖已知缺口位置。
     hls.stopLoad(); // 保留已缓冲内容，不再重复请求同一个确定缺失的分片。
     const reason = missing ? '当前线路视频分片已失效' : '当前线路视频加载失败';
     currentFailureRef.current = { video, start: missing?.start ?? Number.NaN, reason };
+    // 分片失效优先同线续期（保线路保进度）；续期被拒或非分片类错误才走换线
+    if (missing && refreshCurrentLine()) return;
     void autoRecoverRef.current(reason).then((recovered) => {
       if (!recovered && videoRef.current === video) setPlayerError(`${reason}，请在推荐线路中更换`);
     });
@@ -1363,6 +1397,11 @@ export const WatchView: React.FC = () => {
     if (currentFailureRef.current?.video !== videoRef.current) {
       setAutoRecovering(false);
       setRecoveryPending('');
+    } else if (lineRefreshBusyRef.current) {
+      // 同线续期后恢复播放：清掉故障记录，后续新错误按新故障走正常恢复链
+      lineRefreshBusyRef.current = false;
+      currentFailureRef.current = null;
+      showToast('线路已续期，继续播放', 'info');
     }
     const selected = resource?.selected;
     if (selected && activeLine) {
