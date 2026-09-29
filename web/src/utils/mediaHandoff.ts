@@ -4,10 +4,12 @@ export function playbackHlsConfig(warm = false, startPosition = -1): Partial<Hls
   const policy = Hls.DefaultConfig.fragLoadPolicy.default;
   return {
     startPosition,
-    maxBufferLength: warm ? 15 : 300,
-    maxMaxBufferLength: warm ? 30 : 600,
-    maxBufferSize: (warm ? 30 : 300) * 1000 * 1000,
-    backBufferLength: warm ? 10 : 300,
+    // 前向缓冲 3 分钟：maxBufferSize 同步放大否则高码率下会先被字节数截断；
+    // backBufferLength 限制已播部分留存，避免长片整个留在内存里
+    maxBufferLength: warm ? 15 : 180,
+    maxMaxBufferLength: warm ? 30 : 360,
+    maxBufferSize: (warm ? 30 : 180) * 1000 * 1000,
+    backBufferLength: warm ? 10 : 180,
     fragLoadPolicy: { default: { ...policy, errorRetry: {
       ...policy.errorRetry!,
       shouldRetry: (config, count, timeout, response, retry) =>

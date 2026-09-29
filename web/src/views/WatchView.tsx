@@ -496,8 +496,6 @@ export const WatchView: React.FC = () => {
         };
 
         if (!isFile && Hls.isSupported()) {
-          // 前向缓冲 5 分钟：maxBufferSize 同步放大否则高码率下会先被字节数截断；
-          // backBufferLength 限制已播部分留存，避免长片整个留在内存里
           const hls = new Hls(playbackHlsConfig());
           hlsRef.current = hls;
           bindActiveHls(hls, video);
@@ -1092,8 +1090,9 @@ export const WatchView: React.FC = () => {
         hlsRef.current = warmed.hls || null;
         activeSlotRef.current = nextSlot;
         if (warmed.hls) {
-          Object.assign(warmed.hls.config, { maxBufferLength: 300, maxMaxBufferLength: 600,
-            maxBufferSize: 300 * 1000 * 1000, backBufferLength: 300 });
+          // 交接后从预热小缓冲升级到正式 3 分钟前向缓冲（与 playbackHlsConfig 同口径）
+          Object.assign(warmed.hls.config, { maxBufferLength: 180, maxMaxBufferLength: 360,
+            maxBufferSize: 180 * 1000 * 1000, backBufferLength: 180 });
           bindActiveHls(warmed.hls, nextVideo);
         }
         const muted = oldVideo.muted;
