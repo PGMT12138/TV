@@ -98,9 +98,28 @@ async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 
+def _relay_wrap(url: str, request_base: str) -> str:
+    """把配置源地址包装为中转地址；已是中转地址或非 http(s) 原样返回。"""
+    if not url.startswith(("http://", "https://")) or "/api/relay?url=" in url:
+        return url
+    return f"{request_base}/api/relay?url={quote(url, safe='')}"
+
+
+def _client_wants_wrap(request: Request) -> str | None:
+    """App 客户端（OkHttp UA）需要预包装的配置地址：旧版 App 无 relayUrl 逻辑，
+    直接在设备上拉源站（GitHub 被墙）会配置加载失败；浏览器（管理后台）看原始地址。"""
+    ua = (request.headers.get("user-agent") or "").lower()
+    return str(request.base_url).rstrip("/") if "okhttp" in ua else None
+
+
 @app.get("/api/urls")
-async def list_urls(type: int):
-    return {"urls": get_urls(type)}
+async def list_urls(request: Request, type: int):
+    urls = get_urls(type)
+    base = _client_wants_wrap(request)
+    if base:
+        for u in urls:
+            u["url"] = _relay_wrap(u.get("url") or "", base)
+    return {"urls": urls}
 
 
 async def _notify_config_change(utype=None):
@@ -114,8 +133,13 @@ async def _notify_config_change(utype=None):
 
 
 @app.get("/api/urls/all")
-async def list_all_urls(type: int):
-    return {"urls": get_all_urls(type)}
+async def list_all_urls(request: Request, type: int):
+    urls = get_all_urls(type)
+    base = _client_wants_wrap(request)
+    if base:
+        for u in urls:
+            u["url"] = _relay_wrap(u.get("url") or "", base)
+    return {"urls": urls}
 
 
 @app.post("/api/urls")
@@ -149,6 +173,8 @@ RELAY_CACHE_MAX = 512 * 1024 * 1024
 def _relay_rewrite_spider(value: str, base_url: str, request_base: str) -> str:
     """spider/jar 串形如 'url;md5;...' 或纯相对路径：按原配置地址解析成绝对地址后，
     统一改写为服务端中转地址，设备后续拉 jar 也走服务端。非 http 目标原样返回。"""
+    if "/api/relay?url=" in value:
+        return value
     parts = (value or "").split(";")
     target = parts[0].strip()
     if not target.startswith(("http://", "https://")):
@@ -174,18 +200,58 @@ def _relay_cache_trim():
         pass
 
 
+# GitHub 系域名经本地代理拉取（本机直连 GitHub 丢包率高，实测 7/10；代理 10/10）。
+# 可用环境变量 RELAY_PROXY 覆盖，重为空则禁用代理。
+RELAY_PROXY = os.environ.get("RELAY_PROXY", "http://127.0.0.1:7890")
+
+
+def _relay_proxy_for(url: str):
+    if not RELAY_PROXY:
+        return None
+    host = (urlparse(url).hostname or "").lower()
+    if host == "github.com" or host.endswith((".github.com", ".githubusercontent.com")):
+        return RELAY_PROXY
+    return None
+
+
+def _relay_rewrite_rel(value: str, base_url: str, request_base: str) -> str:
+    """站点 api/ext 的相对引用（./py/x.py、../lib/x.js）改写为绝对中转地址：
+    App 端 Decoder 会把 ./ ../ 按配置 URL 解析成绝对路径，配置经中转后基准变成
+    服务端 /api/，导致 /api/py/x.py 404 爬虫加载失败；改成绝对地址从根上消除歧义。"""
+    if not value.startswith(("./", "../")) or "/api/relay?url=" in value:
+        return value
+    target = urljoin(base_url, value)
+    if not target.startswith(("http://", "https://")):
+        return value
+    return f"{request_base}/api/relay?url={quote(target, safe='')}"
+
+
+def _relay_unwrap(url: str) -> str:
+    """展开嵌套的中转地址：新版 App 会把服务端预包装的地址再包一层 relay，逐层取出真实目标。"""
+    for _ in range(3):
+        p = urlparse(url)
+        if "/api/relay" not in p.path:
+            break
+        inner = parse_qs(p.query).get("url", [None])[0]
+        if not inner or not inner.startswith(("http://", "https://")):
+            break
+        url = inner
+    return url
+
+
 @app.get("/api/relay")
 async def relay_download(request: Request, url: str):
     """App 经管理服务端中转拉取 VOD/直播配置与 spider jar：模拟器等设备到 GitHub 等
     源站常不通，服务端网络可达。JSON 配置内的 spider/jar 地址同步改写为中转地址；
     jar 等二进制按 URL 落盘缓存（总量超限删最旧），App 重启不重复回源。"""
+    url = _relay_unwrap(url)
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() in ("127.0.0.1", "localhost", "::1"):
         return JSONResponse({"error": "不支持的地址"}, status_code=400)
     request_base = str(request.base_url).rstrip("/")
     cache_path = os.path.join(RELAY_CACHE_DIR, hashlib.md5(url.encode()).hexdigest())
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(10.0, read=60.0)) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(10.0, read=60.0), proxy=_relay_proxy_for(url)) as client:
             resp = await client.get(url)
         if resp.status_code >= 400:
             return JSONResponse({"error": f"源站返回 HTTP {resp.status_code}"}, status_code=502)
@@ -199,8 +265,12 @@ async def relay_download(request: Request, url: str):
                         if isinstance(data.get(key), str) and data[key]:
                             data[key] = _relay_rewrite_spider(data[key], url, request_base)
                     for site in data.get("sites") or []:
-                        if isinstance(site, dict) and isinstance(site.get("jar"), str) and site["jar"]:
-                            site["jar"] = _relay_rewrite_spider(site["jar"], url, request_base)
+                        if isinstance(site, dict):
+                            if isinstance(site.get("jar"), str) and site["jar"]:
+                                site["jar"] = _relay_rewrite_spider(site["jar"], url, request_base)
+                            for field in ("api", "ext"):
+                                if isinstance(site.get(field), str):
+                                    site[field] = _relay_rewrite_rel(site[field], url, request_base)
                 return Response(json.dumps(data, ensure_ascii=False).encode("utf-8"),
                                 media_type="application/json", headers={"Cache-Control": "no-store"})
             except (ValueError, TypeError):
@@ -216,6 +286,70 @@ async def relay_download(request: Request, url: str):
         return Response(body, media_type=ctype or "application/octet-stream")
     except Exception as e:
         return JSONResponse({"error": f"中转失败: {e}"}, status_code=502)
+
+
+# 兼容旧版 App：配置内的 ./py/x.py、./lib/x.js 会被 App 解析到服务端 /api/py/... 等
+# 路径（旧版已缓存解析后的地址）。按启用的 VOD 配置源基准目录逐一探测源站对应文件。
+_SUBRESOURCE_TTL = 3600
+_subresource_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def _config_base_dirs() -> list[str]:
+    dirs = []
+    for item in get_urls(0):
+        u = (item.get("url") or "").strip()
+        if u.startswith(("http://", "https://")):
+            dirs.append(u.rsplit("/", 1)[0] if "/" in u.split("://", 1)[1] else u)
+    return dirs
+
+
+async def _serve_subresource(subpath: str):
+    now = time.time()
+    hit = _subresource_cache.get(subpath)
+    if hit and now - hit[0] < _SUBRESOURCE_TTL:
+        if hit[1] is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        url = hit[1]
+    else:
+        url = None
+        for base in _config_base_dirs():
+            cand = f"{base}/{subpath}"
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(6.0, read=30.0),
+                                             proxy=_relay_proxy_for(cand)) as client:
+                    probe = await client.head(cand)
+                if probe.status_code < 400:
+                    url = cand
+                    break
+            except Exception:
+                continue
+        _subresource_cache[subpath] = (now, url)
+        if url is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(10.0, read=60.0),
+                                     proxy=_relay_proxy_for(url)) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            return JSONResponse({"error": f"源站返回 HTTP {resp.status_code}"}, status_code=502)
+        return Response(resp.content, media_type=resp.headers.get("content-type", "application/octet-stream"))
+    except Exception as e:
+        return JSONResponse({"error": f"中转失败: {e}"}, status_code=502)
+
+
+@app.get("/api/py/{name}")
+async def relay_py(name: str):
+    return await _serve_subresource(f"py/{name}")
+
+
+@app.get("/api/lib/{name}")
+async def relay_lib(name: str):
+    return await _serve_subresource(f"lib/{name}")
+
+
+@app.get("/api/js/{name}")
+async def relay_js(name: str):
+    return await _serve_subresource(f"js/{name}")
 
 
 def _strip_json_comments(text: str) -> str:
