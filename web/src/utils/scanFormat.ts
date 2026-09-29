@@ -3,7 +3,7 @@ export const fmtSpeed = (mbps: number) => `${mbps >= 10 ? mbps.toFixed(0) : mbps
 
 export const fmtRes = (h?: number) => (!h ? '未知' : h >= 2160 ? '4K' : `${h}P`);
 
-export const AD_LABEL: Record<string, string> = { clean: '无广告', suspect: '疑广告', dirty: '有广告' };
+export const AD_LABEL: Record<string, string> = { clean: '无广', suspect: '疑广', dirty: '有广' };
 
 export const AD_CLASS: Record<string, string> = {
   clean: 'text-emerald-400/90',
@@ -54,6 +54,27 @@ export const isUnderTenMinutes = (seconds?: number) =>
   typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 && seconds < 600;
 export const isDurationAbnormal = (metrics?: Pick<RankableMetrics, 'durationMatch' | 'durationS'>) =>
   isUnderTenMinutes(metrics?.durationS) || metrics?.durationMatch === 'short' || metrics?.durationMatch === 'long';
+
+// ---------------- 徽章分档：标签只显档位，点击弹层看实测明细 ----------------
+export interface TierMeta { label: string; cls: string; hint: string }
+
+/** 速度档与推荐排序阈值对齐（SLOW_LINE_MBPS）：慢速线在 compareRecommended 中沉底。 */
+export function speedTier(mbps?: number): TierMeta {
+  const v = mbps || 0;
+  if (v < SLOW_LINE_MBPS) return { label: '慢速', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40', hint: '档位规则：慢速 < 3M' };
+  if (v < 10) return { label: '快速', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40', hint: '档位规则：快速 3M ~ 10M' };
+  return { label: '极速', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：极速 ≥ 10M' };
+}
+
+/** 清晰度档：采集站"2K"线实测多为 1616/1620p，1600 作 2K 下限贴近实际分布。 */
+export function resTier(height?: number): TierMeta {
+  const h = height || 0;
+  if (!h) return { label: '未知', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40', hint: '档位规则：探测未能识别分辨率' };
+  if (h < 720) return { label: '标清', cls: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/40', hint: '档位规则：标清 < 720p' };
+  if (h < 1600) return { label: '高清', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：高清 720p ~ 1600p' };
+  if (h < 2160) return { label: '2K', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：2K 1600p ~ 2160p' };
+  return { label: '4K', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：4K ≥ 2160p' };
+}
 
 /** 推荐线路比较器：先按时长正常/异常、正片/花絮内容做绝对分层，再比较可播性、
  *  速度、清晰度与综合评分。因此异常或花絮线路无论多清晰、多快，都不可能越过
