@@ -1334,7 +1334,6 @@ export const WatchView: React.FC = () => {
     preparedPlayerRef.current = undefined; // 清缓存：重挂必须重新走 api.player 拿新地址
     setPlayerError('');
     setPlayNonce((n) => n + 1);
-    showToast('线路分片令牌已过期，正在续期当前线路…', 'info');
     return true;
   };
 
@@ -1398,10 +1397,9 @@ export const WatchView: React.FC = () => {
       setAutoRecovering(false);
       setRecoveryPending('');
     } else if (lineRefreshBusyRef.current) {
-      // 同线续期后恢复播放：清掉故障记录，后续新错误按新故障走正常恢复链
+      // 同线续期后恢复播放：清掉故障记录，后续新错误按新故障走正常恢复链（全程静默）
       lineRefreshBusyRef.current = false;
       currentFailureRef.current = null;
-      showToast('线路已续期，继续播放', 'info');
     }
     const selected = resource?.selected;
     if (selected && activeLine) {
