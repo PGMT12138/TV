@@ -250,6 +250,7 @@ export interface ScanMetrics {
   durationS?: number;         // 正片总时长（m3u8 分片时长求和；mp4/未知为空）
   durationMatch?: 'short' | 'ok' | 'long';  // 与片库片长比对：short 疑似预告/假资源，long 疑似拼接广告
   durationDeltaS?: number;    // 与片库片长的差值（秒）
+  trailer?: string;           // 整线选集名过半命中花絮类关键词的内容类别（先导/花絮…）：只标识不判失效
   adLevel: AdLevel;
   adSignals: string[];
   kind?: 'hls' | 'file';

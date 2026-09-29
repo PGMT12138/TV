@@ -45,6 +45,7 @@ export interface RankableMetrics {
   moovEnd?: boolean;   // MP4 索引在文件尾（非 faststart）：仅移动端浏览器起播极慢
   durationMatch?: 'short' | 'ok' | 'long';
   durationS?: number;
+  trailer?: string;    // 花絮/先导内容线（只标识不判失效）：自动推荐沉底，仍可手动选
   scores: { total: number };
 }
 
@@ -54,14 +55,16 @@ export const isUnderTenMinutes = (seconds?: number) =>
 export const isDurationAbnormal = (metrics?: Pick<RankableMetrics, 'durationMatch' | 'durationS'>) =>
   isUnderTenMinutes(metrics?.durationS) || metrics?.durationMatch === 'short' || metrics?.durationMatch === 'long';
 
-/** 推荐线路比较器：先按时长正常/异常做绝对分层，再比较可播性、速度、清晰度与综合评分。
- *  因此异常线路无论多清晰、多快，都不可能越过任意正常时长线路。 */
+/** 推荐线路比较器：先按时长正常/异常、正片/花絮内容做绝对分层，再比较可播性、
+ *  速度、清晰度与综合评分。因此异常或花絮线路无论多清晰、多快，都不可能越过
+ *  任意正常正片线路（手动选择不受此排序限制）。 */
 export function compareRecommended<T extends { metrics?: RankableMetrics }>(a: T, b: T): number {
   const m = a.metrics, n = b.metrics;
   if (!m || !n) return m ? -1 : n ? 1 : 0;
   const aDurationBad = isDurationAbnormal(m);
   const bDurationBad = isDurationAbnormal(n);
   if (aDurationBad !== bDurationBad) return aDurationBad ? 1 : -1;
+  if (!!m.trailer !== !!n.trailer) return m.trailer ? 1 : -1;
   const mobile = isMobileDevice();
   const aBad = isUnsupportedCodec(m.codec) || (mobile && m.moovEnd) || (m.throughputMbps ?? 0) < SLOW_LINE_MBPS;
   const bBad = isUnsupportedCodec(n.codec) || (mobile && n.moovEnd) || (n.throughputMbps ?? 0) < SLOW_LINE_MBPS;

@@ -2,7 +2,7 @@
 // WatchView 当前线路与推荐线路共用；live 模式只出速度/清晰度（直播无广告/时长维度，LiveView 用），
 // compact 为下拉按钮/列表行内的小号变体；title 提供指标含义与探测证据说明
 import React from 'react';
-import { Gauge, MonitorPlay, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle } from 'lucide-react';
+import { Gauge, MonitorPlay, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle, Clapperboard } from 'lucide-react';
 import type { ScanMetrics } from '../types';
 import { fmtSpeed, fmtRes, isUnsupportedCodec, isMobileDevice, isUnderTenMinutes } from '../utils/scanFormat';
 
@@ -59,6 +59,15 @@ export const MetricBadges: React.FC<{
       )}
       {!live && (
         <>
+          {metrics.trailer && (
+            <span
+              className={`${pill} bg-violet-500/15 text-violet-300 border-violet-500/40`}
+              title={`内容识别：整线选集多为「${metrics.trailer}」类内容，非正片；如需观看可手动选择此线路`}
+            >
+              <Clapperboard className={ic} />
+              {metrics.trailer}
+            </span>
+          )}
           <span className={`${pill} ${ad.cls}`} title={evidences ? `广告探测：${evidences}` : ad.tip}>
             <AdIcon className={ic} />
             {ad.label}

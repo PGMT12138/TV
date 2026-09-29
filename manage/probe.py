@@ -8,8 +8,9 @@
 - 时长：m3u8 分片 EXTINF 求和，与片库片长（ref_s）交叉比对，短/长异常参与评分。
 
 另做分片存活抽样（多点状态码探测），拦截"首片存活但列表大面积分片过期"的伪装图床线路。
-花絮/先导片识别两层：整线选集名过半命中关键词直接判 fail；片库无片长参考时按同片
-线路时长中位共识复核，远短于中位的线路补判 durationMatch=short（推荐沉底+徽章提示）。
+花絮/先导片识别两层（均只标识不判失效，线路仍可手动播放）：整线选集名过半命中关键词
+在 metrics.trailer 带出内容类别；片库无片长参考时按同片线路时长中位共识复核，远短于
+中位的线路补判 durationMatch=short（推荐沉底+徽章提示）。
 
 取流走与 /stream 相同的两条路径（httpx 直连回源 / 经设备 fetch 转发），探测出的速度即网页观看的真实速度。
 每次探测滚动写入 site_stats，站点历史广告率作为排序先验；探测结果不做缓存，每次扫描逐线实测。
@@ -562,11 +563,13 @@ def _duration_abnormal(metrics: dict | None) -> bool:
 
 
 def _recommendation_sort_key(r: dict) -> tuple:
-    """最终推荐排序：时长、速度先把关，清晰度优先于广告，同清晰度再比较广告和评分。"""
+    """最终推荐排序：时长、内容类别（花絮/先导）、速度先把关，清晰度优先于广告，
+    同清晰度再比较广告和评分。"""
     metrics = r.get("metrics") or {}
     total = (metrics.get("scores") or {}).get("total") or 0.0
     adjusted = total - 0.06 * _site_ad_rate(r.get("siteKey") or "")
     return (1 if _duration_abnormal(metrics) else 0,
+            1 if metrics.get("trailer") else 0,
             1 if (metrics.get("throughputMbps") or 0) < GOOD_MIN_MBPS else 0,
             -(metrics.get("height") or 0),
             AD_RANK.get(metrics.get("adLevel"), len(AD_RANK)),
@@ -574,11 +577,11 @@ def _recommendation_sort_key(r: dict) -> tuple:
 
 
 def _line_good(r: dict) -> bool:
-    """达标线路：可用、无确认广告、时长比对正常、吞吐达标。"""
+    """达标线路：可用、正片内容（非花絮/先导）、无确认广告、时长比对正常、吞吐达标。"""
     if r.get("status") != "ok" or not r.get("metrics"):
         return False
     m = r["metrics"]
-    return (m.get("adLevel") != "dirty" and not _duration_abnormal(m)
+    return (not m.get("trailer") and m.get("adLevel") != "dirty" and not _duration_abnormal(m)
             and (m.get("throughputMbps") or 0.0) >= GOOD_MIN_MBPS)
 
 
@@ -652,9 +655,6 @@ async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
 
 async def _probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
     site_key, flag, episode_id = cand["siteKey"], cand["flag"], cand["episodeId"]
-    if cand.get("trailerLine"):
-        _stats_insert(site_key, False, "", None, None)
-        return _fail(cand, f"整线为{cand['trailerLine']}内容，非正片")
     t0 = time.monotonic()
     try:
         data = await _call_device_wait("player", {"key": site_key, "flag": flag, "id": episode_id},
@@ -728,7 +728,10 @@ def _apply_duration_ref(metrics: dict, ref_s: float | None) -> None:
 
 
 def _finish(cand: dict, metrics: dict, ref_s: float | None = None) -> dict:
-    """统一算分并落统计。"""
+    """统一算分并落统计。花絮/先导线路不判失效：照常探测，metrics.trailer 带上
+    内容类别，前端出徽章并沉到推荐末尾（仍可手动选择播放）。"""
+    if cand.get("trailerLine"):
+        metrics["trailer"] = cand["trailerLine"]
     metrics["scores"] = _score(metrics["firstFrameS"], metrics["throughputMbps"], metrics.get("height"))
     total = 0.5 * metrics["scores"]["speed"] + 0.5 * metrics["scores"]["quality"]
     total -= {"clean": 0.0, "suspect": 0.1, "dirty": 0.4}[metrics["adLevel"]]
