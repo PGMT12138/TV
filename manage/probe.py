@@ -8,6 +8,8 @@
 - 时长：m3u8 分片 EXTINF 求和，与片库片长（ref_s）交叉比对，短/长异常参与评分。
 
 另做分片存活抽样（多点状态码探测），拦截"首片存活但列表大面积分片过期"的伪装图床线路。
+花絮/先导片识别两层：整线选集名过半命中关键词直接判 fail；片库无片长参考时按同片
+线路时长中位共识复核，远短于中位的线路补判 durationMatch=short（推荐沉底+徽章提示）。
 
 取流走与 /stream 相同的两条路径（httpx 直连回源 / 经设备 fetch 转发），探测出的速度即网页观看的真实速度。
 每次探测滚动写入 site_stats，站点历史广告率作为排序先验；探测结果不做缓存，每次扫描逐线实测。
@@ -55,7 +57,10 @@ TRAILER_MAX_S = 120           # 时长绝对下限：片库无片长可比对时
 # 线路名只是营销话术（"4K"线实测可能 1616p），但只用于探测排序不影响结果，零风险
 FLAG_GOOD_HINTS = ("4k", "蓝光", "超清", "hdr", "1080", "2160", "杜比", "原盘")
 FLAG_LATE_HINTS = ("爱奇艺", "优酷", "腾讯", "mgtv", "bilibili", "哔哩", "vip",
-                   "解析", "花絮", "预告", "可下载", "备用", "有广告")
+                   "解析", "花絮", "预告", "先导", "宣传", "特辑", "可下载", "备用", "有广告")
+# 选集名级花絮识别：整线过半选集名带这些词 → 该线不是正片内容（不少站点把先导片/
+# 花絮单独成线，正片线路选集名则是纯数字或"第N集"；只看线路名会漏掉这种命名）
+TRAILER_NAME_TOKENS = ("先导", "预告", "花絮", "宣传", "特辑", "彩蛋", "看点")
 PLAYLIST_CAP = 2 * 1024 * 1024
 SEGMENT_CAP = 1536 * 1024
 FILE_FFPROBE_CAP = 16 * 1024 * 1024  # MP4 直链补读上限：网盘转存文件的 moov 盒可远超 2MB（实测夸克 4K 线 5.7MB）
@@ -538,6 +543,18 @@ def _flag_quality_bonus(flag: str) -> float:
     return next((b for tok, b in FLAG_QUALITY_BONUS if tok in f), 0.0)
 
 
+def _line_trailer_kind(episodes: list[dict]) -> str | None:
+    """整线选集名过半命中花絮类关键词时返回命中的词（如"先导"），否则 None。
+    部分选集名带词的混合线不判（可能只是给正片集名加了后缀）。"""
+    names = [(ep.get("name") or "") for ep in episodes if ep.get("name")]
+    if not names:
+        return None
+    hits = sum(1 for n in names if any(t in n for t in TRAILER_NAME_TOKENS))
+    if hits * 2 <= len(names):
+        return None
+    return next((t for t in TRAILER_NAME_TOKENS if any(t in n for n in names)), None)
+
+
 def _duration_abnormal(metrics: dict | None) -> bool:
     """时长明显偏短或偏长的线路必须与正常线路分层，不能靠其他指标翻盘。"""
     return bool(metrics and (0 < (metrics.get("durationS") or 0) < 600
@@ -568,6 +585,40 @@ def _line_good(r: dict) -> bool:
 def _line_high(r: dict) -> bool:
     """高质量线路：达标且清晰度 ≥ HIGH_MIN_HEIGHT。"""
     return _line_good(r) and (r["metrics"].get("height") or 0) >= HIGH_MIN_HEIGHT
+
+
+# ---------------- 同片线路时长共识 ----------------
+
+CONSENSUS_MIN_LINES = 3     # 参与共识的最少 ok 线路数（少于 3 条中位数不稳）
+CONSENSUS_MIN_MEDIAN_S = 600  # 中位时长下限：泡面番等全员短片是正常形态，不做共识判定
+
+
+def _consensus_durations(results: list[dict]) -> list[dict]:
+    """片库无片长参考（资源卡进片/片库缺字段）时 _apply_duration_ref 没有参照，
+    120s 绝对下限拦不住 10~30 分钟的先导片/花絮线路。同片正片各线路时长彼此接近
+    （实测同片 8 条线 4639~4758s，±3%），改用本轮全部 ok 线路的中位时长当参照：
+    短于中位 60% 的线路补判 durationMatch=short（与片长比对同罚则，前端同款沉底+徽章）。
+    返回被调整的线路（调用方需向 SSE 重发让前端替换）。"""
+    durs = sorted((r["metrics"].get("durationS") or 0) for r in results
+                  if r.get("status") == "ok" and r.get("flag"))
+    durs = [d for d in durs if d > 0]
+    if len(durs) < CONSENSUS_MIN_LINES:
+        return []
+    med = durs[len(durs) // 2]
+    if med < CONSENSUS_MIN_MEDIAN_S:
+        return []
+    adjusted = []
+    for r in results:
+        m = r.get("metrics") or {}
+        d = m.get("durationS") or 0
+        if (r.get("status") == "ok" and r.get("flag") and 0 < d < med * 0.6
+                and m.get("durationMatch") not in ("short", "long")):
+            m["durationMatch"] = "short"
+            m["scores"]["total"] = round(max(0.0, m["scores"]["total"] * 0.4), 3)
+            m.setdefault("adSignals", []).append(
+                f"时长远低于同片线路中位({int(d)}s/{int(med)}s)")
+            adjusted.append(r)
+    return adjusted
 
 
 # ---------------- 单候选探测 ----------------
@@ -601,6 +652,9 @@ async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
 
 async def _probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
     site_key, flag, episode_id = cand["siteKey"], cand["flag"], cand["episodeId"]
+    if cand.get("trailerLine"):
+        _stats_insert(site_key, False, "", None, None)
+        return _fail(cand, f"整线为{cand['trailerLine']}内容，非正片")
     t0 = time.monotonic()
     try:
         data = await _call_device_wait("player", {"key": site_key, "flag": flag, "id": episode_id},
@@ -967,6 +1021,9 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                 cand = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
                         "vodId": m["id"], "flag": f.get("flag", ""),
                         "episodeId": eps[0]["url"]}
+                trailer = _line_trailer_kind(eps)
+                if trailer:
+                    cand["trailerLine"] = trailer
                 if _flag_rank(f.get("flag") or "") == 0:
                     priority_lines.append(cand)
                 else:
@@ -1120,6 +1177,11 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
         await asyncio.gather(*[one_probe(c) for c in normal])
         if aborted:
             return
+
+        # 同片线路时长共识复核：片库无片长时拦截高于绝对下限的先导片/花絮线路。
+        # 原地调整后向 SSE 重发，前端按 siteKey::flag 幂等替换，推荐/徽章即时生效。
+        for r in _consensus_durations(results):
+            _emit(task, {"type": "result", "result": r})
 
         ok = [r for r in results if r["status"] == "ok" and r.get("flag")]
 
