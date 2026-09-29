@@ -21,7 +21,7 @@ import subprocess
 import time
 from collections import OrderedDict
 from http import HTTPStatus
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
@@ -397,16 +397,24 @@ def _decode_h(h: str) -> dict:
 
 
 def _rewrite_m3u8(request: Request, base_url: str, h: str, via: int, body: bytes) -> bytes:
-    """把 m3u8 里的分片/密钥地址改写成服务端 /stream 代理地址（沿用入口请求头与 via）。"""
+    """把 m3u8 里的分片/密钥地址改写成服务端 /stream 代理地址（沿用入口请求头与 via）。
+    分片行附带 EXTINF 时长（&d=）：mgtv 等 CDN 按身份限突发流量（实测单身份累计
+    ~20MB 即掐断连接进入 403 冷却，配额≈1×实时码率），代理按分片时长节流回源。"""
     prefix = request.scope.get("root_path", "")
     text = body.decode("utf-8", "replace")
     out = []
+    pending_dur = 0.0
     for line in text.split("\n"):
         line = line.rstrip("\r")
         stripped = line.strip()
         if stripped.startswith("#"):
+            if stripped.startswith("#EXTINF:"):
+                try:
+                    pending_dur = float(stripped.split(":", 1)[1].split(",", 1)[0])
+                except ValueError:
+                    pending_dur = 0.0
             if "URI=\"" in stripped:
-                # 仅改写 EXT-X-KEY / EXT-X-MAP 等带 URI= 的行
+                # 仅改写 EXT-X-KEY / EXT-X-MAP 等带 URI= 的行（密钥体量小，不参与节流）
                 parts = stripped.split("URI=\"", 1)
                 tail = parts[1].split("\"", 1)
                 abs_url = tail[0] if tail[0].startswith("http") else urljoin(base_url, tail[0])
@@ -416,7 +424,11 @@ def _rewrite_m3u8(request: Request, base_url: str, h: str, via: int, body: bytes
         elif stripped:
             abs_url = stripped if stripped.startswith("http") else urljoin(base_url, stripped)
             seg_via = 1 if _is_device_local(abs_url) else via
-            out.append(_stream_url(prefix, abs_url, h, seg_via))
+            rewritten = _stream_url(prefix, abs_url, h, seg_via)
+            if pending_dur > 0:
+                rewritten += f"&d={pending_dur:.3f}"
+            pending_dur = 0.0
+            out.append(rewritten)
         else:
             out.append(line)
     return "\n".join(out).encode()
@@ -448,22 +460,144 @@ def _safe_status(code: int) -> int:
 
 
 @router.get("/stream")
-async def stream(request: Request, url: str, h: str = "", via: int = 0):
+async def stream(request: Request, url: str, h: str = "", via: int = 0, d: float = 0.0):
     headers = _decode_h(h)
     if "Range" in request.headers:
         headers["Range"] = request.headers["Range"]
     if via:
         return await _stream_via_device(request, url, headers, h)
-    return await _stream_direct(request, url, headers, h)
+    return await _stream_direct(request, url, headers, h, d)
 
 
-async def _stream_direct(request: Request, url: str, headers: dict, h: str):
-    client = httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(15.0, read=60.0))
+# ---------------- 直连取流的连接池与抖动吸收 ----------------
+# mgtv 等多节点 CDN 对同一 URL 有部分边缘节点回 403/404、重试即 200（HAR 实测同分片
+# 连续 403 六次后 35s 又 200；偶发 502 连接拒绝与 200-178B 的 DRM 桩头）。原实现每个
+# /stream 请求新建 TCP+TLS（每次重新 DNS 轮询节点），等于每个分片都在赌节点，抖动全
+# 部抛给浏览器走 9s 级退避。改为：常驻连接池（连接复用即节点亲和）+ 失败换一次性新
+# 连接（重新解析 DNS 换节点）最多 3 次，服务端亚秒级吸收。
+_stream_pool: httpx.AsyncClient | None = None
+STREAM_RETRY_CODES = (403, 404, 410, 500, 502, 503, 504)
+TS_STUB_MAX = 1024  # 200 但 .ts Content-Length 小于此值视为防盗链/DRM 桩头（真分片均在百 KB 级）
+_pool_bypass: dict[str, float] = {}  # host -> 绕过连接池的截止时间：池内节点刚回过 403 时先换节点
+
+# ---- CDN 突发配额自适应节流（令牌桶）----
+# 实测（HAR + 对照实验）mgtv 等按身份限突发：滑动窗口 ~20MB/60s（≈1× 内容码率），
+# 超限掐断连接进入 ~60s 403 冷却，冷却后同 token 恢复。浏览器激进预取必反复触墙，
+# 表现为"失败几次成功一次再失败"。策略：默认全速（健康 CDN 保留大缓冲能力）；
+# 某 host 出现 403/5xx/传输中断连后标记 PACE_HOST_TTL 内走令牌桶——初始信用
+# PACE_CREDIT 允许一次突发（顺带成为起播缓冲），此后按内容码率（分片体量/时长
+# 的 EMA）回填，恰好贴着配额可持续；按身份（ruid/uid）分桶，多观众互不挤占。
+PACE_CREDIT = 14 * 1024 * 1024   # 初始信用（留余量低于实测 ~18MB 触发线）
+PACE_HOST_TTL = 1800.0           # 触发后该 host 走令牌桶的时长（到期恢复全速试探，又被标记则重来）
+PACE_MIN_RATE = 500_000.0        # 码率估计下限，防异常值把桶卡死
+_host_pace_until: dict[str, float] = {}
+_pace_buckets: dict[str, dict] = {}
+
+
+def _bucket_key(url: str) -> str:
+    host = urlparse(url).hostname or ""
     try:
-        req = client.build_request("GET", url, headers=headers)
-        resp = await client.send(req, stream=True)
+        q = parse_qs(urlparse(url).query)
+        ident = (q.get("ruid") or q.get("uid") or [""])[0]
     except Exception:
-        await client.aclose()
+        ident = ""
+    return f"{host}|{ident}"
+
+
+def _mark_cdn_trip(host: str):
+    """记录一次限流事件：开启该 host 的令牌桶节流并清空其信用（强制收敛到实时回填）。"""
+    if not host:
+        return
+    _host_pace_until[host] = time.time() + PACE_HOST_TTL
+    prefix = f"{host}|"
+    for key, st in _pace_buckets.items():
+        if key.startswith(prefix):
+            st["tokens"] = 0.0
+
+
+def _host_paced(host: str) -> bool:
+    return _host_pace_until.get(host, 0.0) > time.time()
+
+
+async def _bucket_take(st: dict, n: int):
+    """取 n 字节信用，不足则按回填速率等待（令牌桶）。单线程事件循环内无竞态。"""
+    while True:
+        now = time.monotonic()
+        st["tokens"] = min(PACE_CREDIT, st["tokens"] + (now - st["last"]) * st["rate"])
+        st["last"] = now
+        if st["tokens"] >= n:
+            st["tokens"] -= n
+            return
+        rate = max(st["rate"], PACE_MIN_RATE)
+        await asyncio.sleep(min(0.5, max(0.05, (n - st["tokens"]) / rate)))
+
+
+def _stream_pooled() -> httpx.AsyncClient:
+    global _stream_pool
+    if _stream_pool is None or _stream_pool.is_closed:
+        _stream_pool = httpx.AsyncClient(
+            follow_redirects=True, timeout=httpx.Timeout(15.0, read=60.0),
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32))
+    return _stream_pool
+
+
+async def _stream_open(url: str, headers: dict, pooled: bool):
+    """发起一次取流，返回 (响应, 客户端, 是否需在流结束后关闭客户端)。"""
+    owns = not pooled
+    client = _stream_pooled() if pooled else httpx.AsyncClient(
+        follow_redirects=True, timeout=httpx.Timeout(15.0, read=60.0))
+    try:
+        req = client.build_request("GET", url, headers=dict(headers))
+        return await client.send(req, stream=True), client, owns
+    except Exception:
+        if owns:
+            await client.aclose()
+        raise
+
+
+async def _stream_fetch(url: str, headers: dict):
+    """取流并吸收 CDN 节点抖动：首选常驻池（亲和节点），失败/桩头换新连接换节点再试。
+    返回 (响应, 客户端, owns)；三次尝试全部连接失败时响应为 None（调用方回 502）。
+    最后一次尝试拿到的 4xx/5xx 原样保留透传——服务端已换过节点，重试无意义，
+    浏览器按标准错误流程处理（如分片 404 触发换线/续期）。"""
+    host = urlparse(url).hostname or ""
+    bypass = _pool_bypass.get(host, 0.0) > time.time()
+    resp = client = None
+    owns = False
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(1.0 * attempt)  # 断路器冷却期内不再连击，避免拉长封禁
+        try:
+            resp, client, owns = await _stream_open(url, headers, pooled=(attempt == 0 and not bypass))
+        except Exception:
+            continue  # 连接失败也换节点再试（HAR 实测偶发 502 连接拒绝）
+        path = urlparse(str(resp.url)).path
+        cl = resp.headers.get("content-length", "")
+        stub = resp.status_code == 200 and path.endswith(".ts") and cl.isdigit() and 0 < int(cl) < TS_STUB_MAX
+        if resp.status_code not in STREAM_RETRY_CODES and not stub:
+            if bypass and host:
+                _pool_bypass.pop(host, None)  # 换节点成功，恢复池优先
+            break
+        if resp.status_code in (403, 500, 502, 503, 504):
+            _mark_cdn_trip(host)  # 限流信号：该 host 转入令牌桶节流
+        if attempt == 2:
+            break  # 用尽尝试：保留响应原样透传
+        bad_node = resp.status_code == 403
+        await resp.aclose()
+        if owns:
+            await client.aclose()
+        resp = None
+        if bad_node and host and not bypass:
+            _pool_bypass[host] = time.time() + 60.0  # 池内节点在拒：后续请求直接换节点起手
+            bypass = True
+    if resp is None and host:
+        _mark_cdn_trip(host)  # 三次连接全部失败：疑似连接级限流，转令牌桶收敛
+    return resp, client, owns
+
+
+async def _stream_direct(request: Request, url: str, headers: dict, h: str, d: float = 0.0):
+    resp, client, owns = await _stream_fetch(url, headers)
+    if resp is None:
         return JSONResponse({"error": "源站连接失败"}, status_code=502)
     content_type = resp.headers.get("content-type", "application/octet-stream")
     # 跟随重定向后以最终地址判断类型/做相对路径解析（直播源常见 php 入口 302 到 CDN m3u8）
@@ -472,7 +606,8 @@ async def _stream_direct(request: Request, url: str, headers: dict, h: str):
     if is_m3u8:
         body = await resp.aread()
         await resp.aclose()
-        await client.aclose()
+        if owns:
+            await client.aclose()
         # 源站错误状态/空列表一律回 502，不包装成 200：列表轮询拿到 200 空 body 时 hls.js 会把
         # 直播判成"已结束"而静默停载（实测咪咕 CDN 偶发，画面冻住不报错），转 502 让它按标准
         # 错误自动重试自愈；顺带修掉 m3u8 路径原本吞掉源站 4xx/5xx 状态码的问题
@@ -563,28 +698,55 @@ async def _stream_direct(request: Request, url: str, headers: dict, h: str):
                             pass
                     proc.kill()
                     await resp.aclose()
-                    await client.aclose()
+                    if owns:
+                        await client.aclose()
 
             out_headers.pop("Content-Length", None)  # 转码后长度不可预知
             out_headers["Cache-Control"] = "no-store"
             return StreamingResponse(gen_transcode(), status_code=_safe_status(resp.status_code),
                                      media_type="video/mp2t", headers=out_headers)
 
+    # ---- 分片令牌桶节流（host 出现过限流信号且带 EXTINF 时长 d 时启用）----
+    # 按内容码率（本片体量/时长 的 EMA）回填信用：贴着 CDN 的 ~1× 实时滑动配额走，
+    # 初始信用换一次起播突发。健康 CDN 不进桶保持全速。Range 请求（拖进度/直链）不节流。
+    pace_bucket = None
+    if d > 0 and "Range" not in request.headers:
+        try:
+            seg_len = int(resp.headers.get("content-length") or 0)
+        except ValueError:
+            seg_len = 0
+        host = urlparse(final_url).hostname or ""
+        if seg_len > 0 and _host_paced(host):
+            key = _bucket_key(final_url)
+            pace_bucket = _pace_buckets.setdefault(
+                key, {"tokens": PACE_CREDIT, "last": time.monotonic(), "rate": 0.0})
+            bitrate = seg_len / d
+            old = pace_bucket["rate"] or bitrate
+            pace_bucket["rate"] = max(PACE_MIN_RATE, 0.7 * old + 0.3 * bitrate)
+
     async def gen():
         try:
             # 探测阶段读掉的头部字节必须先补回去（transcode=False 时走到这里），否则分片损坏；
             # 流可能已被探测消费过一部分，继续用 seg_iter 而不是再建 aiter_bytes（只能消费一次）
             if head_chunk:
+                if pace_bucket is not None:
+                    await _bucket_take(pace_bucket, len(head_chunk))
                 yield head_chunk
-            if seg_iter is not None:
-                async for chunk in seg_iter:
-                    yield chunk
-            else:
-                async for chunk in resp.aiter_bytes(chunk_size=CHUNK):
-                    yield chunk
+            chunks = seg_iter if seg_iter is not None else resp.aiter_bytes(chunk_size=CHUNK)
+            async for chunk in chunks:
+                if pace_bucket is not None:
+                    await _bucket_take(pace_bucket, len(chunk))
+                yield chunk
+        except asyncio.CancelledError:
+            raise  # 观众断开（换集/seek）不是限流信号
+        except Exception:
+            # 传输中断连（CDN 掐断突发超限的响应体）是最直接的限流信号
+            _mark_cdn_trip(urlparse(final_url).hostname or "")
+            raise
         finally:
             await resp.aclose()
-            await client.aclose()
+            if owns:
+                await client.aclose()
 
     return StreamingResponse(gen(), status_code=_safe_status(resp.status_code), media_type=content_type, headers=out_headers)
 
