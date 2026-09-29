@@ -7,6 +7,8 @@
   重定向广告域、双帧角标静止检测），输出 clean / suspect / dirty 三级 + 证据文案，只标记不剥离；
 - 时长：m3u8 分片 EXTINF 求和，与片库片长（ref_s）交叉比对，短/长异常参与评分。
 
+另做分片存活抽样（多点状态码探测），拦截"首片存活但列表大面积分片过期"的伪装图床线路。
+
 取流走与 /stream 相同的两条路径（httpx 直连回源 / 经设备 fetch 转发），探测出的速度即网页观看的真实速度。
 每次探测滚动写入 site_stats，站点历史广告率作为排序先验；探测结果不做缓存，每次扫描逐线实测。
 """
@@ -718,6 +720,31 @@ async def _probe_hls(cand: dict, url: str, headers: dict, local: bool, pl: dict,
     sg = await _fetch(seg_url, headers, SEGMENT_CAP, local=_is_local(seg_url) or local)
     if sg["status"] >= 400:
         return _fail(cand, f"分片 HTTP {sg['status']}")
+
+    # 分片存活抽样：伪装图床/多 CDN 混布线路常见大面积分片过期（实测"苹果4k专线2️⃣"把
+    # 分片随机散布到 6 个 CDN 且逐日过期，当日约 9 成对象 404，仅测首片碰巧存活时整线
+    # 仍判 ok，还因 2160p 被优先推荐）。列表多点小额探测状态码，过半 ≥400 判整线失效。
+    if not local and len(segments) >= 10:
+        n = len(segments)
+
+        async def sample_one(i: int) -> int | None:
+            if not segments[i]["url"]:
+                return None
+            u = urljoin(url, segments[i]["url"])
+            try:
+                r = await _fetch(u, headers, 2048, local=False, timeout=8.0)
+                return int(r["status"])
+            except Exception:
+                return None  # 超时/网络错误不参与存活统计，避免把慢线路误判成死线
+
+        idxs = sorted({min(n - 1, max(1, int(n * f))) for f in (0.1, 0.3, 0.5, 0.7, 0.9)})
+        statuses = await asyncio.gather(*[sample_one(i) for i in idxs])
+        got = [s for s in statuses if s is not None]
+        dead = sum(1 for s in got if s >= 400)
+        if len(got) >= 3 and dead >= 2 and dead * 2 >= len(got):
+            _stats_insert(cand["siteKey"], False, "", None, None)
+            return _fail(cand, f"分片大面积失效({dead}/{len(got)})")
+
     seg_time = round(sg["elapsed"], 3)
     mbps = round(len(sg["data"]) * 8 / sg["elapsed"] / 1e6, 2) if sg["elapsed"] > 0.05 else 0.0
     info = await _ffprobe(sg["data"]) or {}

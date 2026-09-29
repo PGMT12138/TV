@@ -76,6 +76,7 @@ export function prepareMedia(
     let frameId: number | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
     let lastReadyAt = Date.now();
+    let lastProgress = { readyState: 0, time: -1 };
     let announcedReady = false;
     let playRequested = false;
     const attempts = new Map<string, number>();
@@ -123,10 +124,18 @@ export function prepareMedia(
     function check() {
       if (finished) return;
       if (options.signal.aborted || !options.valid()) { abort(); return; }
-      if (Date.now() - lastReadyAt > (options.timeoutMs || 30_000)) {
+      // 预算 60s：4K 线路首分片大（实测伪装图床分片 1.2~1.5MB）且慢节点 TTFB 高，
+      // 30s 内未就绪就判死会把仍在加载的站点误标记为会话不可用
+      if (Date.now() - lastReadyAt > (options.timeoutMs || 60_000)) {
         fail(new Error('备用线路在目标进度未能起播')); return;
       }
       if (video.readyState < 1) return;
+      // 有实质进展（缓冲层级提升 / 画面位置推进）就续预算：判死条件是"持续 60s 无任何进展"，
+      // 而不是"启动后 60s 内没就绪"——慢站点加载中不该被标记会话不可用
+      if (video.readyState > lastProgress.readyState || Math.abs(video.currentTime - lastProgress.time) > 0.25) {
+        lastProgress = { readyState: video.readyState, time: video.currentTime };
+        lastReadyAt = Date.now();
+      }
       const target = Math.max(0, options.position());
       if (Number.isFinite(video.duration) && target >= video.duration) {
         fail(new Error('备用线路不包含当前播放位置')); return;

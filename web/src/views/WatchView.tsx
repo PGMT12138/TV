@@ -286,6 +286,8 @@ export const WatchView: React.FC = () => {
       if (prev) {
         const byNum = episodes.find((e) => e.number === prev.number);
         if (byNum) return byNum;
+        // 新线路集数少于当前集数号：钳制到最后一集，不退回第一集
+        if (prev.number > episodes.length) return episodes[episodes.length - 1];
       }
       const bySel = selectedEpisodeId ? episodes.find((e) => e.id === selectedEpisodeId) : undefined;
       if (bySel) return bySel;
@@ -533,7 +535,7 @@ export const WatchView: React.FC = () => {
                 if (nextIndex > 0) selectFlag(movieId, nextIndex, false);
                 const nextFlag = flags[nextIndex];
                 const nextEpisode = nextFlag.episodes.find((ep) => ep.number === currentEpisode.number)
-                  || nextFlag.episodes[0];
+                  || nextFlag.episodes[Math.min(currentEpisode.number, nextFlag.episodes.length) - 1];
                 if (nextEpisode) setCurrentEpisode(nextEpisode);
                 if (idx < 0) {
                   failedSourceKeysRef.current.add(`${selectedMatch.siteKey}::${selectedMatch.vodId}::${activeLine.flag}::${currentEpisode?.number || 1}`);
@@ -1035,10 +1037,15 @@ export const WatchView: React.FC = () => {
       setSwitchingTarget((target) => target?.request === request ? { ...target, flag: targetFlag, label: `${match.siteName} · ${targetFlag}` } : target);
       if (lineFailure(siteKey, match.vodId, targetFlag)) return false;
       const previousEpisode = latestSelectionRef.current.currentEpisode;
+      // 换源时按集数号延续；目标线路集数不足时钳制到它的最后一集（如 59 集源切到 9 集的
+      // 臻彩线，不能整次切换失败，也不能把用户从第 30 集退回第一集）。
+      const targetEps = flags[index].episodes;
       const episode = previousEpisode
-        ? flags[index].episodes.find((ep) => ep.number === previousEpisode.number)
-        : flags[index].episodes[0];
-      if (!episode) return fail('该线路缺少当前选集'); // 不能在换源时把用户正在看的后续集数退回第一集。
+        ? targetEps.find((ep) => ep.number === previousEpisode.number)
+          || targetEps[Math.min(previousEpisode.number, targetEps.length) - 1]
+        : targetEps[0];
+      if (!episode) return fail('该线路缺少当前选集');
+      const clamped = !!previousEpisode && episode.number !== previousEpisode.number;
       const data = await api.player(siteKey, flags[index].flag, episode.id);
       if (!valid()) return false;
       if (data.error || !(data.play || data.url)) return fail(data.error || '未获取到播放地址');
@@ -1116,6 +1123,7 @@ export const WatchView: React.FC = () => {
         ...(manual ? { autoUserPicked: true, initialAutoPlayPending: false, awaitScan: false } : {}) });
       if (manual) patchScan(movieId, { userPicked: true });
       setCurrentEpisode(episode);
+      if (clamped) showToast(`该线路仅有 ${targetEps.length} 集，已切换到最后一集`, 'info');
       setPlayerError('');
       committed = true;
       return true;
