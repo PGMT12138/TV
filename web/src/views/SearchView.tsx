@@ -2,8 +2,9 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { GENRE_LIST, REGION_LIST, YEAR_LIST, HOT_SEARCH_TERMS } from '../data/mockMovies';
 import { MovieCard } from '../components/MovieCard';
-import { api } from '../api';
-import { MovieItem } from '../types';
+import { api, imgUrl } from '../api';
+import { MovieItem, ResourceMatch } from '../types';
+import { useLiveSearch, adoptResourceMatch } from '../hooks/useLiveSearch';
 import {
   Search,
   SlidersHorizontal,
@@ -16,6 +17,8 @@ import {
   Star,
   Flame,
   Clock,
+  Play,
+  Zap,
   Loader2
 } from 'lucide-react';
 
@@ -35,37 +38,23 @@ const SORT_OPTIONS = [
 ];
 
 export const SearchView: React.FC = () => {
-  const { filterState, updateFilter, resetFilter, movies, mergeMovies, saveBrowse, restoreBrowse } = useApp();
+  const { filterState, updateFilter, resetFilter, movies, mergeMovies, saveBrowse, restoreBrowse, navigateTo, showToast } = useApp();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showMobileFilters, setShowMobileFilters] = useState(false);
-  const [remoteSearching, setRemoteSearching] = useState(false);
-  const seqRef = useRef(0);
+  const [adoptingKey, setAdoptingKey] = useState('');
 
   const query = filterState.query.trim();
 
-  // 手动搜索：点按钮/回车才触发远程检索（豆瓣/TMDB 片库）。
-  // 此处只检索影片资料，进入播放页后再搜索站点资源。
-  const runSearch = (term: string) => {
-    const wd = term.trim();
-    if (!wd) return;
-    const seq = ++seqRef.current;
-    setRemoteSearching(true);
-    api.catalogSearch(wd)
-      .then(({ list }) => {
-        if (seq !== seqRef.current) return;
-        if (list.length) {
-          mergeMovies(list);
-        }
-      })
-      .catch(() => { /* 忽略：豆瓣不可达时本地过滤仍可用 */ })
-      .finally(() => {
-        if (seq === seqRef.current) setRemoteSearching(false);
-      });
-  };
+  // 手动双端搜索：仅点「搜索」按钮/回车/热词才查豆瓣片库与 app 端站点（缓存+实时）。输入过程完全静止——
+  // 不发请求、默认影片网格原样展示，点搜索后才切到结果视图。豆瓣有结果只展示豆瓣，无结果才兜底展示 app 端。
+  const live = useLiveSearch(filterState.query);
 
-  // 从快速搜索弹窗/首页热词带词进入时视为一次明确的搜索
+  // 带词进入（弹窗跳转/首页热词点击）视为一次明确的搜索意图，落地立即检索一次
+  const mountedRef = useRef(false);
   useEffect(() => {
-    if (query) runSearch(query);
+    if (mountedRef.current) return;
+    mountedRef.current = true;
+    if (query) live.search(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -192,11 +181,37 @@ export const SearchView: React.FC = () => {
     finally { setBrowseLoading(false); }
   };
 
-  const browseMode = !query;
+  // 当前输入词对应一轮已发起的检索（点过搜索/回车/热词/带词进入）
+  const searched = !live.stale && live.phase !== 'idle';
+  // 输入未搜索期间维持浏览态：默认影片网格原样展示，点搜索后才切到结果视图
+  const browseMode = !query || !searched;
   const displayMovies = browseMode ? browse.items : filteredMovies;
 
+  // 豆瓣无可见结果且 app 端有命中时才兜底展示 app 结果；app 端无论何时无结果都不做任何提示
+  const showAppResults = !browseMode && live.phase === 'done' && displayMovies.length === 0 && live.appMatches.length > 0;
+  const showSearching = !browseMode && displayMovies.length === 0
+    && (live.phase === 'searching' || live.appSearching);
+
+  // app 端结果点击：注册为资源影片后直达播放页（播放页按 raw 站点信息精确锁定来源播放）
+  const handleAdopt = async (m: ResourceMatch) => {
+    const uid = `${m.siteKey}:${m.vodId}`;
+    if (adoptingKey) return;
+    setAdoptingKey(uid);
+    try {
+      const movie = await adoptResourceMatch(m);
+      if (!movie) {
+        showToast('获取片源详情失败，请确认设备在线', 'warning');
+        return;
+      }
+      mergeMovies([movie]);
+      navigateTo('watch', { movieId: movie.id });
+    } finally {
+      setAdoptingKey('');
+    }
+  };
+
   const hasActiveFilters =
-    filterState.query !== '' ||
+    !browseMode ||
     filterState.type !== 'all' ||
     filterState.genre !== '全部' ||
     filterState.region !== '全部' ||
@@ -229,7 +244,7 @@ export const SearchView: React.FC = () => {
             value={filterState.query}
             onChange={(e) => updateFilter({ query: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') runSearch(filterState.query);
+              if (e.key === 'Enter') live.search(filterState.query);
             }}
             placeholder="输入影片名、导演、演员、流派（例如：沙丘、维伦纽瓦、科幻、宫崎骏）..."
             className="w-full bg-transparent text-base sm:text-lg text-white placeholder-zinc-500 focus:outline-none font-sans-modern"
@@ -243,11 +258,11 @@ export const SearchView: React.FC = () => {
             </button>
           )}
           <button
-            onClick={() => runSearch(filterState.query)}
+            onClick={() => live.search(filterState.query)}
             disabled={!filterState.query.trim()}
             className="shrink-0 flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-emerald-500 text-black text-sm font-bold hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {remoteSearching ? (
+            {live.phase === 'searching' ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Search className="w-4 h-4" />
@@ -267,7 +282,7 @@ export const SearchView: React.FC = () => {
               key={term}
               onClick={() => {
                 updateFilter({ query: term });
-                runSearch(term);
+                live.search(term);
               }}
               className={`px-3 py-1 text-xs rounded-full border transition-all ${
                 filterState.query === term
@@ -375,6 +390,9 @@ export const SearchView: React.FC = () => {
             {browseMode ? (
               <>探索片库: <span className="text-emerald-400 font-bold">{displayMovies.length}</span> 部
                 <span className="text-xs text-zinc-500 font-normal ml-1.5">豆瓣全库 · 按筛选实时加载</span></>
+            ) : showAppResults ? (
+              <>片源直搜: <span className="text-emerald-400 font-bold">{live.appMatches.length}</span> 条结果
+                <span className="text-xs text-zinc-500 font-normal ml-1.5">豆瓣片库未收录 · 来自 app 端站点</span></>
             ) : (
               <>检索结果: <span className="text-emerald-400 font-bold">{displayMovies.length}</span> 部影视作品</>
             )}
@@ -465,6 +483,65 @@ export const SearchView: React.FC = () => {
             </div>
           )}
         </>
+      ) : showAppResults ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+            <span className="flex items-center gap-2 text-sm font-semibold text-zinc-200 font-sans-modern">
+              <Zap className="w-4 h-4 text-emerald-400" />
+              片源站点直搜
+              <span className="text-emerald-400 font-bold">{live.appMatches.length}</span> 条结果
+              {live.appSearching && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />}
+            </span>
+            <span className="text-xs text-zinc-500">点击卡片直接进入播放</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {live.appMatches.map((m) => {
+              const uid = `${m.siteKey}:${m.vodId}`;
+              return (
+                <div
+                  key={uid}
+                  onClick={() => handleAdopt(m)}
+                  className="group flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-zinc-900/60 border border-zinc-800 hover:border-emerald-500/30 hover:bg-zinc-900 cursor-pointer transition-all"
+                >
+                  <div className="flex items-center gap-4 min-w-0">
+                    <img
+                      src={imgUrl(m.pic)}
+                      alt={m.title}
+                      className="w-14 h-20 object-cover rounded-xl shrink-0 group-hover:scale-105 transition-transform bg-zinc-800"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-zinc-100 group-hover:text-emerald-300 transition-colors truncate">
+                          {m.title}
+                        </h4>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 shrink-0 truncate max-w-32">
+                          {m.siteName}
+                        </span>
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-1.5 line-clamp-1">
+                        {[m.typeName, m.remarks].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center shrink-0 pl-1">
+                    {adoptingKey === uid ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-emerald-400" />
+                    ) : (
+                      <span className="p-2.5 rounded-xl bg-zinc-800 group-hover:bg-emerald-500 group-hover:text-black text-zinc-300 transition-colors">
+                        <Play className="w-4 h-4 fill-current" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : showSearching ? (
+        <div className="py-20 flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+          <p className="text-sm text-zinc-500">正在检索「{query}」...</p>
+        </div>
       ) : (
         <div className="py-20 text-center space-y-4 rounded-3xl bg-zinc-900/30 border border-zinc-800/80 p-8">
           <Film className="w-12 h-12 text-zinc-600 mx-auto" />
