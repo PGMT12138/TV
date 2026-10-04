@@ -17,6 +17,11 @@ import Hls, { type ErrorData } from 'hls.js';
 // 播放倍速档位（0.5 ~ 2.0），localStorage 记忆，换集/换源/刷新后保持
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
+// 桥接/服务不可用类错误：不是线路本身失效，不写入会话级拉黑（等桥恢复后可再切）
+const BRIDGE_OUTAGE_RE = /设备未连接|device offline|Failed to fetch|请求失败|连接中断/;
+// 选集令牌过期（采集站 playUrl 时效 token，见 bridge.py /api/player 注释）：重拉详情换新 token 可恢复
+const EPISODE_TOKEN_EXPIRED_RE = /令牌可能已过期|选集令牌/;
+
 // 音量条上限：源站响度普遍偏低且 video.volume 上限 1.0，MSE 路径经 WebAudio
 // GainNode 把音量条扩展到 200%（>100% 部分为增益放大，过大可能削波爆音）；
 // 原生 HLS 路径（iPhone 等）不接管音频通道，上限保持 100%
@@ -76,6 +81,7 @@ export const WatchView: React.FC = () => {
     probingSites,
     patchScan,
     patchResource,
+    waitDeviceOnline,
     confirmRestoredSource,
     navigateTo,
     goBack,
@@ -321,7 +327,7 @@ export const WatchView: React.FC = () => {
 
   // 从进入播放页计时；到 12 秒才允许自动起播，不因搜索/探测提前完成而跳过等待。
   useEffect(() => {
-    if (!initialPending || waitRemaining > 0 || resource?.status !== 'ready' || initialBusyRef.current || manualSelectionRef.current) return;
+    if (!initialPending || waitRemaining > 0 || resource?.status !== 'ready' || initialBusyRef.current || manualSelectionRef.current || switchingTarget) return;
     const available = selectableResults.filter((r) => !failedUpgradesRef.current.has(scanResultKey(r)));
     const best = initialCandidate(available, clockNow - enteredRef.current.at, refDurationS);
     if (!best && scan?.status !== 'done' && resource.awaitScan !== false) return;
@@ -341,7 +347,7 @@ export const WatchView: React.FC = () => {
       initialBusyRef.current = false;
       setSelectionBusy(false);
     });
-  }, [clockNow, initialPending, waitRemaining, resource?.status, scan?.results, scan?.status, selectionBusy, movieId, refDurationS, sessionFailures]);
+  }, [clockNow, initialPending, waitRemaining, resource?.status, scan?.results, scan?.status, selectionBusy, switchingTarget, movieId, refDurationS, sessionFailures]);
 
   // 用户开始手动补测时，尚未交接的自动质量升级也停止，继续保留当前播放。
   useEffect(() => {
@@ -359,6 +365,7 @@ export const WatchView: React.FC = () => {
     if (!resource?.autoUpgradeEligible || initialPending || !hasPlayedRef.current || !isPlaying
         || resource.manualProbeStarted || resource.autoUserPicked || resource.restoredPick || resource.restorePending || scan?.userPicked
         || manualSelectionRef.current || pendingUpgradeRef.current || selectionBusy || autoRecovering
+        || switchingTarget
         || recoveryBusyRef.current || resource.status !== 'ready' || !selectedMatch || !activeLine) return;
     const recommendations = qualifiedRecommendations(selectableResults, refDurationS);
     const best = recommendations[0];
@@ -371,7 +378,9 @@ export const WatchView: React.FC = () => {
     } else if (recommendations.length >= 3 && !resource.autoDuringDone && !upgradeQuotaRef.current.during) {
       upgradeSourceRef.current('during', best);
     }
-  }, [resource, scan, isPlaying, initialPending, selectionBusy, autoRecovering, stalled, movieId, refDurationS, automaticScanFinished, sessionFailures]);
+    // switchingTarget：自动升级不得与进行中的切换（含手动）撞车——两者都会推进全局请求
+    // 序号使对方失效，撞上会表现为点击换线毫无反应
+  }, [resource, scan, isPlaying, initialPending, selectionBusy, autoRecovering, switchingTarget, stalled, movieId, refDurationS, automaticScanFinished, sessionFailures]);
 
   const destroyHls = useCallback(() => {
     if (hlsRef.current) {
@@ -477,6 +486,15 @@ export const WatchView: React.FC = () => {
         // 或实际为 MP4 却标成 filename*=...iso）也算文件：
         // 喂给 hls.js 会把整个文件当清单下载，永远进不了帧
         const isFile = isFileMedia(res, activeProbeKind);
+        // 冷切起播前清理另一槽遗留：上次换线若走 prepared 冷切路径，旧槽可能残留过期的
+        // 直链 src 永远卡在 readyState=0（冷切不经过 warmed 交接的清理），之后每次换线
+        // 预热都从这个死槽起步。冷切时不会有预热占用另一槽，清理是安全的。
+        const otherSlot = videoSlotsRef.current[1 - activeSlotRef.current];
+        if (otherSlot && otherSlot !== video) {
+          otherSlot.pause();
+          otherSlot.removeAttribute('src');
+          otherSlot.load();
+        }
         // 起播看门狗：HEVC-TS 等播放器解不了的流，分片正常下载但 MSE 进不了帧，
         // readyState 永远停在 0 且不触发 hls.js fatal error；大文件直链走 /stream
         // 代理时 moov 在尾部、Range 回读也要时间，60s 无 metadata 才判死
@@ -1019,17 +1037,28 @@ export const WatchView: React.FC = () => {
     try {
       if (!match) return false;
       // 先取得目标详情和播放地址，再一次性提交站点/线路/选集，准备期间保留当前播放。
-      let flags: ResourceFlag[] = siteKey === original.selected?.siteKey ? original.flags : [];
-      if (!flags.length || (flag !== undefined && !flags.some((f) => f.flag === flag))) {
-        const data = await api.siteDetail(match.siteKey, match.vodId);
-        if (!valid()) return false;
-        if (data.error) return fail(data.error);
-        flags = (data.flags || []).map((f) => ({ flag: f.flag, episodes: (f.episodes || []).map((ep, index) => ({
+      const parseFlags = (data: Awaited<ReturnType<typeof api.siteDetail>>) =>
+        (data.flags || []).map((f) => ({ flag: f.flag, episodes: (f.episodes || []).map((ep, index) => ({
           id: ep.url, number: index + 1, title: ep.name || `第${index + 1}集`, duration: data.remarks || '',
           previewUrl: '', videoUrl: '',
         })) })).filter((f) => f.episodes.length > 0);
+      // 设备桥闪断（错误含「设备未连接」）：等重连后重试一次，与 fetchMatchFlags 同口径
+      const loadDetail = async () => {
+        let data = await api.siteDetail(match.siteKey, match.vodId);
+        if (data.error && /设备未连接|device offline/i.test(data.error)) {
+          showToast('设备连接中断，正在等待重连…', 'warning');
+          if (await waitDeviceOnline() && valid()) data = await api.siteDetail(match.siteKey, match.vodId);
+        }
+        return data;
+      };
+      let flags: ResourceFlag[] = siteKey === original.selected?.siteKey ? original.flags : [];
+      if (!flags.length || (flag !== undefined && !flags.some((f) => f.flag === flag))) {
+        const data = await loadDetail();
+        if (!valid()) return false;
+        if (data.error) return fail(data.error);
+        flags = parseFlags(data);
       }
-      const index = flag === undefined ? flags.findIndex((f) => !lineFailure(siteKey, match.vodId, f.flag)) : flags.findIndex((f) => f.flag === flag);
+      let index = flag === undefined ? flags.findIndex((f) => !lineFailure(siteKey, match.vodId, f.flag)) : flags.findIndex((f) => f.flag === flag);
       if (index < 0 || !flags[index]) return fail('该线路已无可用选集');
       targetFlag = flags[index].flag;
       setSwitchingTarget((target) => target?.request === request ? { ...target, flag: targetFlag, label: `${match.siteName} · ${targetFlag}` } : target);
@@ -1037,14 +1066,34 @@ export const WatchView: React.FC = () => {
       const previousEpisode = latestSelectionRef.current.currentEpisode;
       // 换源时按集数号延续；目标线路集数不足时钳制到它的最后一集（如 59 集源切到 9 集的
       // 臻彩线，不能整次切换失败，也不能把用户从第 30 集退回第一集）。
-      const targetEps = flags[index].episodes;
-      const episode = previousEpisode
-        ? targetEps.find((ep) => ep.number === previousEpisode.number)
-          || targetEps[Math.min(previousEpisode.number, targetEps.length) - 1]
-        : targetEps[0];
+      const pickEpisode = (eps: Episode[]) => previousEpisode
+        ? (eps.find((ep) => ep.number === previousEpisode.number) || eps[Math.min(previousEpisode.number, eps.length) - 1])
+        : eps[0];
+      let episode = pickEpisode(flags[index].episodes);
       if (!episode) return fail('该线路缺少当前选集');
-      const clamped = !!previousEpisode && episode.number !== previousEpisode.number;
-      const data = await api.player(siteKey, flags[index].flag, episode.id);
+      let data = await api.player(siteKey, flags[index].flag, episode.id);
+      if (data.error && /设备未连接|device offline/i.test(data.error)) {
+        showToast('设备连接中断，正在等待重连…', 'warning');
+        if (await waitDeviceOnline() && valid()) data = await api.player(siteKey, flags[index].flag, episode.id);
+      }
+      // 同站切线复用的旧详情选集带时效 token，长时间观看后过期：重拉详情换新 token 再试一次。
+      // 这类时效失败不能当线路失效拉黑，否则同站线路会连环失败到刷新页面为止
+      if (data.error && EPISODE_TOKEN_EXPIRED_RE.test(data.error)) {
+        const fresh = await loadDetail();
+        if (!valid()) return false;
+        if (!fresh.error) {
+          const freshFlags = parseFlags(fresh);
+          const fi = freshFlags.findIndex((f) => f.flag === targetFlag);
+          if (fi >= 0 && freshFlags[fi].episodes.length) {
+            const reEpisode = pickEpisode(freshFlags[fi].episodes);
+            if (!reEpisode) return fail('该线路缺少当前选集');
+            flags = freshFlags;
+            index = fi;
+            episode = reEpisode;
+            data = await api.player(siteKey, flags[index].flag, reEpisode.id);
+          }
+        }
+      }
       if (!valid()) return false;
       if (data.error || !(data.play || data.url)) return fail(data.error || '未获取到播放地址');
       if (pendingUpgradeRef.current && videoRef.current?.paused) {
@@ -1122,7 +1171,8 @@ export const WatchView: React.FC = () => {
         ...(manual ? { autoUserPicked: true, initialAutoPlayPending: false, awaitScan: false } : {}) });
       if (manual) patchScan(movieId, { userPicked: true });
       setCurrentEpisode(episode);
-      if (clamped) showToast(`该线路仅有 ${targetEps.length} 集，已切换到最后一集`, 'info');
+      if (!!previousEpisode && episode.number !== previousEpisode.number)
+        showToast(`该线路仅有 ${flags[index].episodes.length} 集，已切换到最后一集`, 'info');
       setPlayerError('');
       committed = true;
       return true;
@@ -1131,7 +1181,8 @@ export const WatchView: React.FC = () => {
         failureReason = error instanceof Error ? error.message : '该线路未能正常起播';
       return false;
     } finally {
-      if (!committed && failureReason && valid() && !controller.signal.aborted && match && !pendingUpgradeRef.current?.cancelled)
+      // 桥接/服务不可用类失败不写入会话级拉黑：不是线路本身的问题，设备恢复后应允许重试
+      if (!committed && failureReason && !BRIDGE_OUTAGE_RE.test(failureReason) && valid() && !controller.signal.aborted && match && !pendingUpgradeRef.current?.cancelled)
         markSessionLineFailure({ movieId, siteKey, vodId: match.vodId, flag: targetFlag, reason: failureReason });
       if (!committed) warmed?.destroy();
       if (standbyAbortRef.current === controller) standbyAbortRef.current = null;
@@ -1142,7 +1193,9 @@ export const WatchView: React.FC = () => {
         setSelectionBusy(false);
         if (!committed) {
           manualSelectionRef.current = false;
-          showToast('目标线路无法播放，已标记本次会话不可用，当前播放保留', 'warning');
+          showToast(BRIDGE_OUTAGE_RE.test(failureReason)
+            ? '设备桥接不可用，本次切换未完成；线路未标记失效，设备恢复后可重试'
+            : '目标线路无法播放，已标记本次会话不可用，当前播放保留', 'warning');
           if (currentFailureRef.current?.video === videoRef.current)
             void autoRecoverRef.current(currentFailureRef.current.reason);
         }
@@ -1680,6 +1733,9 @@ export const WatchView: React.FC = () => {
             <span className="text-xs font-semibold text-zinc-200 truncate">
               {r.siteName}
               <span className="text-zinc-500 font-normal"> · {r.flag}</span>
+              {!!r.episodeCount && r.episodeCount > 1 && (
+                <span className="text-zinc-500 font-normal"> · {r.episodeCount}集</span>
+              )}
             </span>
           </span>
           {unavailable ? <span className="text-[10px] text-zinc-400">本次会话不可用</span> : <MetricBadges metrics={r.metrics!} />}
@@ -2125,7 +2181,16 @@ export const WatchView: React.FC = () => {
                     const r = flagResult(activeLine?.flag || '');
                     const unavailable = selectedMatch && lineFailure(selectedMatch.siteKey, selectedMatch.vodId, activeLine?.flag);
                     if (unavailable) return <span className="text-[10px] text-zinc-500">本次会话不可用</span>;
-                    if (r && r.status === 'ok' && r.metrics) return <MetricBadges metrics={r.metrics} />;
+                    if (r && r.status === 'ok' && r.metrics) return (
+                      <>
+                        {!!r.episodeCount && r.episodeCount > 1 && (
+                          <span className="text-[10px] text-zinc-400 shrink-0" title={`该线路共 ${r.episodeCount} 集`}>
+                            {r.episodeCount}集
+                          </span>
+                        )}
+                        <MetricBadges metrics={r.metrics} />
+                      </>
+                    );
                     if (r?.status === 'fail') return <span className="text-[10px] font-bold text-rose-400/90">✕ 探测失败</span>;
                     return scan?.status === 'running' ? (
                       <span className="flex items-center gap-1 text-[10px] text-zinc-500 whitespace-nowrap">

@@ -60,6 +60,8 @@ interface AppContextType {
   mergeMovies: (items: MovieItem[]) => void;
   loadMovieDetail: (id: string) => Promise<MovieItem | undefined>;
   resolveResources: (movieId: string, options?: ResolveResourceOptions) => Promise<void>;
+  /** 等设备桥重连回来（高负载闪断退避最长 60s），超时返回 false；换线/选源等设备调用失败重试用 */
+  waitDeviceOnline: (timeoutMs?: number) => Promise<boolean>;
   restartResourceSearch: (movieId: string) => Promise<void>;
   selectMatch: (movieId: string, match: ResourceMatch, manual?: boolean) => Promise<ResourceFlag[] | undefined>;
   selectFlag: (movieId: string, index: number, manual?: boolean) => void;
@@ -1070,6 +1072,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         mergeMovies,
         loadMovieDetail,
         resolveResources,
+        waitDeviceOnline,
         restartResourceSearch,
         selectMatch,
         selectFlag,
