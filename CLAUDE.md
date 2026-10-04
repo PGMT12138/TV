@@ -47,7 +47,7 @@ pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000 --root-path /tv-manage --ws-ping-interval 20 --ws-ping-timeout 60
 ```
 
-注意：Windows 本机 8000 端口常在系统保留段（`netsh interface ipv4 show excludedportrange protocol=tcp`），本地测试固定用 8100。`--ws-ping-timeout 60` 是必须的：智能选源扫描时设备爬虫（QuickJS/Chaquopy）高负载会拖慢 WebSocket 心跳响应，uvicorn 默认 20s 超时会掐断桥接。**Windows git-bash 下启动必须去掉 `--root-path /tv-manage`**：MSYS 会把 `/tv-manage` 转换成 `C:/Program Files/Git/tv-manage` 污染 root_path，`/api/player` 会拼出 `C:/Program Files/Git/tv-manage/stream?...` 播放地址（浏览器当 file:// 打开）；本地直连 8100 无反代前缀，root-path 仅生产 nginx 需要。
+注意：Windows 本机 8000 端口常在系统保留段（`netsh interface ipv4 show excludedportrange protocol=tcp`），本地测试固定用 8100。`--ws-ping-timeout 60` 是必须的：智能选源扫描时设备爬虫（QuickJS/Chaquopy）高负载会拖慢 WebSocket 心跳响应，uvicorn 默认 20s 超时会掐断桥接。**Windows git-bash 下启动必须去掉 `--root-path /tv-manage`**：MSYS 会把 `/tv-manage` 转换成 `C:/Program Files/Git/tv-manage` 污染 root_path，`/api/player` 会拼出 `C:/Program Files/Git/tv-manage/stream?...` 播放地址（浏览器当 file:// 打开）；本地直连 8100 无反代前缀，root-path 仅生产 nginx 需要。**本机启动还要带 `RELAY_PROXY=http://127.0.0.1:7897`**：`/api/relay` 对 GitHub 系域名走本地代理，代码默认 7890 在本机不监听（Mihomo mixed 端口是 7897），不带会导致 jsm.json 等 GitHub 配置源 502、App 端站点加载不出来（clun.top 等国内源不受影响）。
 
 ### web (CINE 视频站前端)
 
