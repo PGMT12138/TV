@@ -268,6 +268,11 @@ export const SourcePickerModal: React.FC<Props> = ({
                                     }`}
                                   >
                                     <span className="truncate max-w-[10rem]">{r.flag}</span>
+                                    {!!r.episodeCount && r.episodeCount > 1 && (
+                                      <span className="text-zinc-500 text-[9px] shrink-0" title={`该线路共 ${r.episodeCount} 集`}>
+                                        {r.episodeCount}集
+                                      </span>
+                                    )}
                                     {unavailable ? <span className="text-zinc-400 text-[9px] shrink-0">本次会话不可用</span> : ok ? (
                                       <span className="flex items-center gap-1 text-[9px] shrink-0 whitespace-nowrap">
                                         {isUnsupportedCodec(r.metrics!.codec) && (

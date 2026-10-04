@@ -628,7 +628,8 @@ def _consensus_durations(results: list[dict]) -> list[dict]:
 
 def _fail(cand: dict, error: str) -> dict:
     return {"siteKey": cand["siteKey"], "siteName": cand["siteName"], "vodId": cand["vodId"],
-            "flag": cand["flag"], "status": "fail", "error": error[:80]}
+            "flag": cand["flag"], "status": "fail", "error": error[:80],
+            **({"episodeCount": cand["episodeCount"]} if "episodeCount" in cand else {})}
 
 
 async def probe_candidate(cand: dict, ref_s: float | None = None) -> dict:
@@ -1023,7 +1024,9 @@ async def _run_scan(task: ScanTask, matches: list[dict], ref_s: float | None = N
                     continue
                 cand = {"siteKey": m["key"], "siteName": m.get("name") or m["key"],
                         "vodId": m["id"], "flag": f.get("flag", ""),
-                        "episodeId": eps[0]["url"]}
+                        "episodeId": eps[0]["url"],
+                        # 线路总集数（来自详情选集列表），随探测结果下发供前端展示
+                        "episodeCount": len(eps)}
                 trailer = _line_trailer_kind(eps)
                 if trailer:
                     cand["trailerLine"] = trailer

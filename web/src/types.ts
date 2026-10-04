@@ -262,6 +262,7 @@ export interface ScanCandidateResult {
   siteName: string;
   vodId: string;
   flag: string;               // 站点级失败时为空
+  episodeCount?: number;      // 该线路总集数（探测阶段来自站点详情选集列表；旧结果无此字段）
   status: 'ok' | 'fail';
   error?: string;
   metrics?: ScanMetrics;

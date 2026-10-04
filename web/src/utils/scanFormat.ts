@@ -66,12 +66,14 @@ export function speedTier(mbps?: number): TierMeta {
   return { label: '极速', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：极速 ≥ 10M' };
 }
 
-/** 清晰度档：采集站"2K"线实测多为 1616/1620p，1600 作 2K 下限贴近实际分布。 */
+/** 清晰度档：采集站"2K"线实测多为 1616/1620p，1600 作 2K 下限贴近实际分布。
+ *  分档口径：模糊 < 720p · 标清 720p~1080p · 高清 1080p~2K · 2K · 4K。 */
 export function resTier(height?: number): TierMeta {
   const h = height || 0;
   if (!h) return { label: '未知', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40', hint: '档位规则：探测未能识别分辨率' };
-  if (h < 720) return { label: '标清', cls: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/40', hint: '档位规则：标清 < 720p' };
-  if (h < 1600) return { label: '高清', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：高清 720p ~ 1600p' };
+  if (h < 720) return { label: '模糊', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/40', hint: '档位规则：模糊 < 720p' };
+  if (h < 1080) return { label: '标清', cls: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/40', hint: '档位规则：标清 720p ~ 1080p' };
+  if (h < 1600) return { label: '高清', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：高清 1080p ~ 1600p' };
   if (h < 2160) return { label: '2K', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：2K 1600p ~ 2160p' };
   return { label: '4K', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40', hint: '档位规则：4K ≥ 2160p' };
 }
