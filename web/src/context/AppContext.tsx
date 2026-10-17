@@ -557,7 +557,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMovieResources((prev) => {
       const cur = prev[movieId];
       if (!cur?.scan) return prev;
-      const results = cur.scan.results.filter((x) => !(x.siteKey === item.siteKey && x.flag === item.flag));
+      // 幂等键含 vodId：同一站点搜到多个结果（同名不同 vod）时，各自线路独立存在
+      const results = cur.scan.results.filter((x) => !(x.siteKey === item.siteKey && x.vodId === item.vodId && x.flag === item.flag));
       results.push(item);
       return { ...prev, [movieId]: { ...cur, scan: { ...cur.scan, results, finished: results.length } } };
     });
@@ -640,7 +641,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? [...res.matches].sort((a, b) => Number(b.siteKey === preferredSiteKey) - Number(a.siteKey === preferredSiteKey))
       : res.matches;
     const candidates = orderedMatches
-      .filter((m) => (seen.has(m.siteKey) ? false : (seen.add(m.siteKey), true)))
+      .filter((m) => { const uid = `${m.siteKey}:${m.vodId}`; return seen.has(uid) ? false : (seen.add(uid), true); })
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
     // 片库片长（如"118分钟"）解析成秒传给后端，做时长交叉比对（识别预告片/拼接广告）
     const movie = moviesRef.current.find((m) => m.id === movieId);
@@ -687,10 +688,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = movieResourcesRef.current[movieId];
     if (!res?.searchEnded || res.scan?.status !== 'done' || res.scan.error || res.automaticScanComplete) return;
     const run = resourceRunRef.current.get(movieId) || 0;
-    const scanned = new Set(res.scan.results.map((r) => r.siteKey));
+    const scanned = new Set(res.scan.results.map((r) => `${r.siteKey}:${r.vodId}`));
     const seen = new Set<string>();
     const cands = res.matches
-      .filter((m) => !scanned.has(m.siteKey) && !seen.has(m.siteKey) && (seen.add(m.siteKey), true))
+      .filter((m) => { const uid = `${m.siteKey}:${m.vodId}`; return !scanned.has(uid) && !seen.has(uid) && (seen.add(uid), true); })
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
     if (!cands.length) {
       patchResource(movieId, { automaticScanComplete: true });
@@ -740,8 +741,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast('有探测正在进行中，请稍候', 'info');
       return;
     }
-    const match = res.matches.find((m) => m.siteKey === siteKey);
-    if (!match) return;
+    const siteMatches = res.matches.filter((m) => m.siteKey === siteKey);
+    if (!siteMatches.length) return;
     patchResource(movieId, { manualProbeStarted: true });
     const run = resourceRunRef.current.get(movieId) || 0;
     setProbingSites((prev) => new Set(prev).add(siteKey));
@@ -752,8 +753,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       next.delete(siteKey);
       return next;
     });
-    // 手动补测不带 prior：独立探测该站，不受全局额度/达标短路影响
-    api.resourceScan([{ key: match.siteKey, id: match.vodId, name: match.siteName }], refDurationS).then((r) => {
+    // 手动补测不带 prior：独立探测该站（含同站多个搜索结果），不受全局额度/达标短路影响
+    const cands = siteMatches.map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }));
+    api.resourceScan(cands, refDurationS).then((r) => {
       if ((resourceRunRef.current.get(movieId) || 0) !== run) return;
       if (r.error || !r.scanId) {
         finish();
@@ -783,10 +785,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     const seen = new Set<string>();
     const cands = siteKeys
-      .map((k) => res.matches!.find((m) => m.siteKey === k))
-      .filter((m): m is ResourceMatch => !!m)
+      .flatMap((k) => res.matches!.filter((m) => m.siteKey === k))
       .map((m) => ({ key: m.siteKey, id: m.vodId, name: m.siteName }))
-      .filter((c) => (seen.has(c.key) ? false : (seen.add(c.key), true)));
+      .filter((c) => { const uid = `${c.key}:${c.id}`; return seen.has(uid) ? false : (seen.add(uid), true); });
     if (!cands.length) return;
     patchResource(movieId, { manualProbeStarted: true });
     const run = resourceRunRef.current.get(movieId) || 0;

@@ -17,7 +17,8 @@ interface Props {
   isFeature: boolean;
   selectedSiteKey?: string;
   selectedFlag?: string;
-  onSelect: (siteKey: string, flag?: string) => void;
+  selectedVodId?: string;          // 同站多结果时精确高亮当前播放的那条
+  onSelect: (siteKey: string, flag?: string, vodId?: string) => void;
   lineFailure?: (siteKey: string, vodId: string, flag?: string) => string | undefined;
   researching?: boolean;                           // 清空旧资源并重新搜索中
   onResearch?: () => void;                         // 二次确认后重新搜索全部站点
@@ -39,7 +40,7 @@ const GROUP_STYLE: Record<string, { panel: string; dot: string; label: string }>
 };
 
 export const SourcePickerModal: React.FC<Props> = ({
-  open, onClose, scan, matches, isFeature, selectedSiteKey, selectedFlag, onSelect, lineFailure,
+  open, onClose, scan, matches, isFeature, selectedSiteKey, selectedFlag, selectedVodId, onSelect, lineFailure,
   researching, onResearch, probingSites, onProbeSite, onProbeAllUnprobed, onReprobeRecommended, onReprobeSite,
 }) => {
   // 分组折叠：推荐默认展开，其余默认收起
@@ -112,7 +113,7 @@ export const SourcePickerModal: React.FC<Props> = ({
               {scan?.status === 'running'
                 ? `智能测速中 ${scan.finished}/${scan.total || '…'} 条线路，结果实时更新`
                 : grouped
-                  ? <>{okCount}/{(scan?.results || []).length} 条线路可用 · {matches.length} 个站点
+                  ? <>{okCount}/{(scan?.results || []).length} 条线路可用 · {new Set(matches.map((m) => m.siteKey)).size} 个站点
                       {scan?.stoppedEarly && <span className="text-emerald-300/90"> · 已锁定高质量线路，提前完成</span>}</>
                   : '尚未完成探测'}
             </p>
@@ -237,7 +238,7 @@ export const SourcePickerModal: React.FC<Props> = ({
                                 </button>
                                 <button
                                   disabled={!!lineFailure?.(e.match.siteKey, e.match.vodId)}
-                                  onClick={() => onSelect(e.match.siteKey, undefined)}
+                                  onClick={() => onSelect(e.match.siteKey, undefined, e.match.vodId)}
                                   title="跳过测速，直接用该站默认线路起播（无速度/清晰度参考）"
                                   className="px-2 py-1 rounded-lg bg-zinc-800/80 border border-zinc-700 text-zinc-300 text-[10px] hover:border-zinc-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
@@ -250,14 +251,15 @@ export const SourcePickerModal: React.FC<Props> = ({
                           {(hasLines) && (
                             <div className="flex flex-wrap gap-1.5 mt-1.5">
                               {e.lines.map((r) => {
-                                const active = r.siteKey === selectedSiteKey && r.flag === selectedFlag;
+                                const active = r.siteKey === selectedSiteKey && r.flag === selectedFlag
+                                  && (!selectedVodId || r.vodId === selectedVodId);
                                 const unavailable = lineFailure?.(r.siteKey, r.vodId, r.flag);
                                 const ok = r.status === 'ok' && r.metrics;
                                 return (
                                   <button
-                                    key={r.flag}
+                                    key={`${r.vodId}:${r.flag}`}
                                     disabled={!!unavailable}
-                                    onClick={() => onSelect(r.siteKey, r.flag)}
+                                    onClick={() => onSelect(r.siteKey, r.flag, r.vodId)}
                                     title={unavailable ? `本次会话不可用：${unavailable}` : ok ? undefined : r.error}
                                     className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] border transition-colors ${
                                       unavailable ? 'bg-zinc-900/40 border-zinc-800 text-zinc-500 opacity-50 grayscale cursor-not-allowed' : active

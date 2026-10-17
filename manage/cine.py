@@ -846,15 +846,19 @@ class ScanBody(BaseModel):
 
 @router.post("/api/resource/scan")
 async def resource_scan(body: ScanBody):
-    """启动一次扫描：入参为聚合搜索命中的站点列表（按匹配分排序），按站点去重后探测其全部线路。"""
+    """Start a scan: input is a list of sites hit by aggregated search (sorted by match score), deduplicated by site + vodId before probing all their lines.
+    When the same site hits multiple videos of the same title, each video's lines are probed independently (each result carries its own vodId)."""
     dev = active_device()
     if dev is None or not dev.online:
-        return {"error": "设备未连接，请打开 App 并保持前台运行"}
+        return {"error": "Device not connected, please open the App and keep it in the foreground"}
     seen, matches = set(), []
     for c in body.candidates:
-        if not c.key or not c.id or c.key in seen:
+        if not c.key or not c.id:
             continue
-        seen.add(c.key)
+        uid = f"{c.key}:{c.id}"
+        if uid in seen:
+            continue
+        seen.add(uid)
         matches.append({"key": c.key, "id": c.id, "name": c.name})
     del matches[SCAN_SITES_CAP:]  # 候选站点上限（60，与前端 matches 上限对齐；探测规模由优先额度/每站上限/早停约束）
     if not matches:

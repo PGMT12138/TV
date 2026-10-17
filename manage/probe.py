@@ -124,7 +124,7 @@ async def _call_device_wait(action: str, params: dict, timeout: float) -> dict:
 
 async def start_scan(matches: list[dict], ref_s: float | None = None, fresh: bool = False,
                      prior: list[dict] | None = None) -> str:
-    """matches: [{key, id, name}]，已按匹配分排序、按站点去重；ref_s 为片库片长（秒），供时长交叉比对。
+    """matches: [{key, id, name}]，已按匹配分排序、按站点+vodId 去重（同站同名多条结果各自探测）；ref_s 为片库片长（秒），供时长交叉比对。
     fresh=True 为手动重探：不做"达标即停"早停（用户要求全量重测）。
     prior 为本片此前各轮扫描已实测的线路结果（前端合并扫描状态，含 metrics）：
     ① 优先批次的 PRIORITY_LINES_CAP 上限跨扫描累计封顶；② 早停条件与最终推荐键按

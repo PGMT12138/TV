@@ -1002,10 +1002,11 @@ export const WatchView: React.FC = () => {
     busyHints.push('正在解析播放地址…');
   if (autoRecovering && !switchingTarget) busyHints.push('当前线路失效，正在自动寻找可用线路…');
 
-  const applySource = async (siteKey: string, flag: string | undefined, manual = true, recovery = false): Promise<boolean> => {
+  // vodId 省略时回退到该站第一条（历史恢复等只存了站点的场景）；同站多结果必须带 vodId 才能精确切换
+  const applySource = async (siteKey: string, flag: string | undefined, manual = true, recovery = false, vodId?: string): Promise<boolean> => {
     const original = latestSelectionRef.current.resource;
     if (!original) return false;
-    const targetMatch = original.matches.find((m) => m.siteKey === siteKey);
+    const targetMatch = original.matches.find((m) => m.siteKey === siteKey && (!vodId || m.vodId === vodId));
     if (targetMatch && lineFailure(siteKey, targetMatch.vodId, flag)) return false;
     standbyAbortRef.current?.abort();
     const controller = new AbortController();
@@ -1027,7 +1028,7 @@ export const WatchView: React.FC = () => {
       && latestSelectionRef.current.resource?.searchStartedAt === run
       && (!automaticUpgrade || !latestSelectionRef.current.resource?.manualProbeStarted)
       && (manual || recovery || (!manualSelectionRef.current && !latestSelectionRef.current.resource?.autoUserPicked));
-    const match = original.matches.find((m) => m.siteKey === siteKey);
+    const match = original.matches.find((m) => m.siteKey === siteKey && (!vodId || m.vodId === vodId));
     const oldVideo = videoRef.current;
     const warmSwitch = !!oldVideo && (hasPlayedRef.current || recovery);
     if (warmSwitch) setSelectionBusy(true);
@@ -1213,7 +1214,7 @@ export const WatchView: React.FC = () => {
     setSuggestionPendingKey(key);
     try {
       // 与手动换线共用路径：先准备地址，再携带当前集数、进度和暂停状态提交。
-      await applySource(suggestedLine.siteKey, suggestedLine.flag, true);
+      await applySource(suggestedLine.siteKey, suggestedLine.flag, true, false, suggestedLine.vodId);
     } finally {
       setSuggestionPendingKey((pending) => pending === key ? null : pending);
     }
@@ -1253,7 +1254,7 @@ export const WatchView: React.FC = () => {
         paused: !!videoRef.current?.paused, player: loadedPlayerRef.current } };
     pendingUpgradeRef.current = pending;
     setSelectionBusy(true);
-    void applySource(candidate.siteKey, candidate.flag, false).then((ok) => {
+    void applySource(candidate.siteKey, candidate.flag, false, false, candidate.vodId).then((ok) => {
       if (pendingUpgradeRef.current !== pending) return;
       if (!ok) {
         if (!pending.cancelled) failedUpgradesRef.current.add(pending.key);
@@ -1308,7 +1309,7 @@ export const WatchView: React.FC = () => {
       setRecoveryPending('');
       try {
         for (const candidate of candidates) {
-          const ok = await applySource(candidate.siteKey, candidate.flag, false, true);
+          const ok = await applySource(candidate.siteKey, candidate.flag, false, true, candidate.vodId);
           if (!validRecovery()) return true;
           if (ok) {
             patchResource(movieId, { provisional: scan?.status === 'running' || undefined });
@@ -1715,7 +1716,7 @@ export const WatchView: React.FC = () => {
 
   // 推荐线路/流畅备选共用同一张线路卡片：primary=推荐分组（第 1 名标注综合最佳）
   const renderLineCard = (r: ScanCandidateResult, i: number, primary: boolean) => {
-    const active = r.siteKey === selectedMatch?.siteKey && r.flag === activeLine?.flag;
+    const active = r.siteKey === selectedMatch?.siteKey && r.vodId === selectedMatch?.vodId && r.flag === activeLine?.flag;
     const unavailable = lineFailure(r.siteKey, r.vodId, r.flag);
     const loading = switchingTarget?.siteKey === r.siteKey && switchingTarget.flag === r.flag;
     return (
@@ -1723,7 +1724,7 @@ export const WatchView: React.FC = () => {
         key={scanResultKey(r)}
         disabled={!!unavailable || loading}
         aria-busy={loading}
-        onClick={() => !active && !unavailable && applySource(r.siteKey, r.flag)}
+        onClick={() => !active && !unavailable && applySource(r.siteKey, r.flag, true, false, r.vodId)}
         title={unavailable ? `本次会话不可用：${r.siteName} · ${r.flag}（${unavailable.reason}）` : active ? `当前线路：${r.siteName} · ${r.flag}` : `切换到 ${r.siteName} · ${r.flag}${primary && i === 0 ? '（综合最佳）' : ''}`}
         className={`flex items-center gap-2 px-2.5 py-2 rounded-xl border transition-colors text-left ${
           unavailable ? 'bg-zinc-900/50 border-zinc-800 opacity-50 grayscale cursor-not-allowed' : active
@@ -2367,6 +2368,7 @@ export const WatchView: React.FC = () => {
       isFeature={movie.type === 'movie' || movie.type === 'doc'}
       selectedSiteKey={selectedMatch?.siteKey}
       selectedFlag={activeLine?.flag}
+      selectedVodId={selectedMatch?.vodId}
       researching={researching}
       onResearch={handleResearch}
       probingSites={probingSites}
@@ -2382,9 +2384,9 @@ export const WatchView: React.FC = () => {
         if (keys.length) reprobeSites(movieId, keys);
       }}
       onReprobeSite={(siteKey) => reprobeSites(movieId, [siteKey])}
-      onSelect={(siteKey, flag) => {
+      onSelect={(siteKey, flag, vodId) => {
         setSourceModalOpen(false);
-        applySource(siteKey, flag);
+        applySource(siteKey, flag, true, false, vodId);
       }}
     />
     </>

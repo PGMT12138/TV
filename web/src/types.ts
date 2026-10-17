@@ -285,4 +285,5 @@ export interface ScanState {
   highestKey?: string;
 }
 
-export const scanResultKey = (r: { siteKey: string; flag: string }) => `${r.siteKey}::${r.flag}`;
+export const scanResultKey = (r: { siteKey: string; vodId?: string; flag: string }) =>
+  `${r.siteKey}::${r.vodId || ''}::${r.flag}`;
