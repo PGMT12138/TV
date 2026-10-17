@@ -88,10 +88,9 @@ def _current_user(request: Request) -> dict | None:
 
 def _user_profile(user: dict) -> dict:
     conn = get_conn()
-    row = conn.execute("SELECT COALESCE(SUM(watched_seconds), 0) AS s FROM history WHERE user_id = ?",
-                       (user["id"],)).fetchone()
+    row = conn.execute("SELECT watch_seconds FROM users WHERE id = ?", (user["id"],)).fetchone()
     conn.close()
-    hours = round((row["s"] or 0) / 3600, 1)
+    hours = round((row["watch_seconds"] if row else 0) / 3600, 1)
     return {"id": str(user["id"]), "name": user["username"],
             "watchTimeHours": hours,
             "joinedDate": (user["created_at"] or "")[:10]}
@@ -285,6 +284,28 @@ class HistoryBody(BaseModel):
     siteKey: str = ""   # 最后选择的来源站点（重新进入时优先恢复）
     vodId: str = ""     # 上次命中的站内资源 ID（用于识别缓存是否仍指向同一资源）
     flag: str = ""      # 最后选择的线路
+
+
+class WatchTimeBody(BaseModel):
+    seconds: float = 0
+
+
+@router.post("/api/user/watch-time")
+async def user_watch_time(request: Request, body: WatchTimeBody):
+    """累计实际观看时长（前端按真实播放分钟心跳上报）：回看/重复观看照常累加。
+    单次心跳限制 1~600 秒，异常值丢弃，防止刷时长或脏数据。"""
+    user = _require(request)
+    if user is None:
+        return _auth_error()
+    seconds = min(max(body.seconds or 0, 0), 600)
+    if seconds < 1:
+        return {"ok": True, "added": 0}
+    conn = get_conn()
+    conn.execute("UPDATE users SET watch_seconds = watch_seconds + ? WHERE id = ?",
+                 (int(seconds), user["id"]))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "added": int(seconds)}
 
 
 @router.post("/api/user/history")

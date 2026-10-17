@@ -185,6 +185,9 @@ export const api = {
   saveHistory: (body: Partial<WatchHistoryItem>) =>
     request<{ ok: boolean }>('/api/user/history', { method: 'POST', body: JSON.stringify(body) }),
   deleteHistory: (id: string) => request(`/api/user/history/${id}`, { method: 'DELETE' }),
+  // 实际观看时长心跳：仅真实播放时间，回看/重复观看照常累加（每满 1 分钟上报）
+  reportWatchTime: (seconds: number) =>
+    request<{ ok: boolean }>('/api/user/watch-time', { method: 'POST', body: JSON.stringify({ seconds }) }),
 };
 
 /** 图片统一走服务端透传（后端 row_to_item 已把外链改写为 /api/img 相对路径，直链兜底）。 */

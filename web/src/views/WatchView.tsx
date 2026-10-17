@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../context/AppContext';
 import { api } from '../api';
 import { Episode, ResourceState, ResourceFlag, ScanCandidateResult, scanResultKey } from '../types';
@@ -135,6 +136,8 @@ export const WatchView: React.FC = () => {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
   const [researching, setResearching] = useState(false);
+  // 重新搜索的二次确认：独立全局弹窗（不在选源弹窗内嵌套），确认后才执行 handleResearch
+  const [confirmResearch, setConfirmResearch] = useState(false);
   const [autoRecovering, setAutoRecovering] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState('');
   const [playNonce, setPlayNonce] = useState(0);      // 重试播放的触发器
@@ -635,6 +638,40 @@ export const WatchView: React.FC = () => {
     }, 4000);
     return () => clearInterval(timer);
   }, [movieId, currentEpisode?.id, duration, recordWatchProgress]);
+
+  // 实际观看时长累计：秒级滴答，仅在视频真实播放且页面可见时累加，每满 1 分钟上报一次；
+  // 页面隐藏/离开播放页时把余量（≥5 秒）用 keepalive 补报，回看/重复观看照常累加
+  useEffect(() => {
+    let acc = 0;
+    let reported = 0;
+    const flush = (keepalive = false) => {
+      const delta = acc - reported;
+      if (delta < 5) return;
+      reported += delta;
+      if (keepalive) {
+        try {
+          fetch('/api/user/watch-time', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seconds: delta }), keepalive: true, credentials: 'same-origin',
+          }).catch(() => {});
+        } catch { /* 忽略补报失败 */ }
+      } else void api.reportWatchTime(delta).catch(() => {});
+    };
+    const tick = setInterval(() => {
+      const v = videoRef.current;
+      if (v && !v.paused && !v.ended && !document.hidden) acc += 1;
+      if (acc - reported >= 60) flush();
+    }, 1000);
+    const onHide = () => flush(true);
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener('pagehide', onHide);
+      document.removeEventListener('visibilitychange', onHide);
+      flush(true);
+    };
+  }, []);
 
   // 大屏下影片信息卡高度与播放器保持一致（宽度/窗口变化时跟随，内容超出时卡内滚动）。
   // 依赖 movie：启动只预载 catalogAll 的 139 部热门片，玩具总动员5 等长尾片进播放页时
@@ -2359,6 +2396,41 @@ export const WatchView: React.FC = () => {
 
     {/* 选源/下载弹窗：置于动画容器之外，fixed 定位以视口为基准 */}
     {downloadOpen && <DownloadPanel source={downloadSource} onClose={closeDownloads} onConfig={setDownloadConfig} />}
+    {confirmResearch && createPortal(
+      <div
+        className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm flex items-center justify-center p-5"
+        onClick={() => setConfirmResearch(false)}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="research-confirm-title"
+          className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h4 id="research-confirm-title" className="text-base font-bold text-white">确认重新搜索站点？</h4>
+          <p className="mt-2 text-xs leading-5 text-zinc-400">
+            将清除本影片的搜索缓存、历史来源偏好、当前线路和推荐线路，并清空选源面板后从 App 重新搜索。观看进度会保留。
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => setConfirmResearch(false)}
+              className="px-4 py-2 rounded-xl border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => { setConfirmResearch(false); void handleResearch(); }}
+              disabled={researching}
+              className="px-4 py-2 rounded-xl border border-rose-500/50 bg-rose-500/20 text-xs font-bold text-rose-200 hover:bg-rose-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              清除并重新搜索
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
     <SourcePickerModal
       open={sourceModalOpen}
       onClose={() => setSourceModalOpen(false)}
@@ -2370,7 +2442,7 @@ export const WatchView: React.FC = () => {
       selectedFlag={activeLine?.flag}
       selectedVodId={selectedMatch?.vodId}
       researching={researching}
-      onResearch={handleResearch}
+      onResearch={() => { setSourceModalOpen(false); setConfirmResearch(true); }}
       probingSites={probingSites}
       onProbeSite={(siteKey) => probeSite(movieId, siteKey)}
       onProbeAllUnprobed={() => {

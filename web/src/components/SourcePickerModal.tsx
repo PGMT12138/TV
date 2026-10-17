@@ -45,22 +45,15 @@ export const SourcePickerModal: React.FC<Props> = ({
 }) => {
   // 分组折叠：推荐默认展开，其余默认收起
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ recommended: true });
-  const [confirmResearch, setConfirmResearch] = useState(false);
 
   useEffect(() => {
-    if (!open) {
-      setConfirmResearch(false);
-      return;
-    }
+    if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (confirmResearch) setConfirmResearch(false);
-        else onClose();
-      }
+      if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose, confirmResearch]);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -98,7 +91,7 @@ export const SourcePickerModal: React.FC<Props> = ({
               </h3>
               {onResearch && (
                 <button
-                  onClick={() => setConfirmResearch(true)}
+                  onClick={() => { onClose(); onResearch(); }}
                   disabled={researching}
                   title="清空当前影片的搜索缓存、来源偏好和选源结果后重新搜索"
                   className="h-6 flex items-center gap-1 px-2 rounded-lg bg-rose-500/10 border border-rose-500/35 text-rose-300 text-[10px] leading-none font-bold hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
@@ -195,9 +188,10 @@ export const SourcePickerModal: React.FC<Props> = ({
                       return (
                         <div key={`${e.match.siteKey}:${e.match.vodId}`}
                           className="rounded-xl bg-black/25 border border-white/5 px-3 py-2">
-                          {/* 站点行头：名称 + 备注 + 最优指标 / 未探测操作 */}
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-xs font-bold text-zinc-200 truncate">{e.match.siteName}</span>
+                          {/* 站点行头：名称独占一行（移动端窄屏不被挤压截断），备注/指标/操作第二行 */}
+                          <div className="flex flex-col gap-1 min-w-0">
+                            <span className="text-xs font-bold text-zinc-200">{e.match.siteName}</span>
+                            <div className="flex items-center gap-2 min-w-0 flex-wrap">
                             {e.match.remarks && (
                               <span className="text-[10px] text-zinc-500 truncate font-normal shrink-0">{e.match.remarks}</span>
                             )}
@@ -246,6 +240,7 @@ export const SourcePickerModal: React.FC<Props> = ({
                                 </button>
                               </span>
                             )}
+                            </div>
                           </div>
                           {/* 线路 chips：成功带指标，失败带原因 tooltip，当前线路高亮 */}
                           {(hasLines) && (
@@ -307,40 +302,6 @@ export const SourcePickerModal: React.FC<Props> = ({
             );
           })}
         </div>
-
-        {confirmResearch && (
-          <div
-            className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm flex items-center justify-center p-5"
-            onClick={(e) => { e.stopPropagation(); setConfirmResearch(false); }}
-          >
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="research-confirm-title"
-              className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h4 id="research-confirm-title" className="text-base font-bold text-white">确认重新搜索站点？</h4>
-              <p className="mt-2 text-xs leading-5 text-zinc-400">
-                将清除本影片的搜索缓存、历史来源偏好、当前线路和推荐线路，并清空选源面板后从 App 重新搜索。观看进度会保留。
-              </p>
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  onClick={() => setConfirmResearch(false)}
-                  className="px-4 py-2 rounded-xl border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white transition-colors"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={() => { setConfirmResearch(false); onResearch?.(); }}
-                  className="px-4 py-2 rounded-xl border border-rose-500/50 bg-rose-500/20 text-xs font-bold text-rose-200 hover:bg-rose-500/30 transition-colors"
-                >
-                  清除并重新搜索
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>,
     document.body

@@ -88,9 +88,14 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
-            created_at TEXT DEFAULT ''
+            created_at TEXT DEFAULT '',
+            watch_seconds INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # 旧库补列：累计实际观看秒数（区别于 history 的"看到的位置"，回看/重复观看持续累加）
+    user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+    if "watch_seconds" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN watch_seconds INTEGER NOT NULL DEFAULT 0")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash TEXT PRIMARY KEY,
