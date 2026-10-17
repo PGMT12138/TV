@@ -200,6 +200,9 @@ export const WatchView: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(100);
+  // 进度条悬停位置的时间预览：x 为相对进度条左端的像素，超出两端时钳制避免提示溢出播放器
+  const [hoverTime, setHoverTime] = useState<{ time: number; x: number } | null>(null);
+  const scrubberRef = useRef<HTMLDivElement>(null);
   const [volume, setVolume] = useState(() => {
     const saved = parseFloat(localStorage.getItem('cine.volume') || '');
     return Number.isFinite(saved) && saved > 0 ? Math.min(saved, VOLUME_CAP) : 1; // 默认 100%，记忆上次音量
@@ -1547,6 +1550,15 @@ export const WatchView: React.FC = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   }
 
+  // 悬停/拖动进度条时按指针横向位置换算对应时间；拖动选值时 input 会捕获指针，事件仍冒泡到这里，提示跟随滑块
+  const handleScrubberHover = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = scrubberRef.current;
+    if (!el || !isFinite(duration) || duration <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverTime({ time: ratio * duration, x: Math.min(rect.width - 20, Math.max(20, ratio * rect.width)) });
+  };
+
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   // 缓冲区可能落后于播放位置（拖进度条后），取两者较大值避免渐变色带倒序
   const bufferedEdge = Math.min(100, Math.max(progressPercent, duration > 0 ? (bufferedEnd / duration) * 100 : 0));
@@ -1990,7 +2002,21 @@ export const WatchView: React.FC = () => {
               }`}
             >
               {/* Timeline Scrubber */}
-              <div className="relative group/scrubber mb-1.5 sm:mb-3 cursor-pointer">
+              <div
+                ref={scrubberRef}
+                onPointerMove={handleScrubberHover}
+                onPointerLeave={() => setHoverTime(null)}
+                onPointerCancel={() => setHoverTime(null)}
+                className="relative group/scrubber mb-1.5 sm:mb-3 cursor-pointer"
+              >
+                {hoverTime && (
+                  <div
+                    className="absolute bottom-full left-0 mb-2 -translate-x-1/2 pointer-events-none px-2 py-1 rounded-md bg-black/85 text-[11px] leading-none text-zinc-100 font-medium tabular-nums whitespace-nowrap shadow-lg shadow-black/40"
+                    style={{ left: hoverTime.x }}
+                  >
+                    {formatTime(hoverTime.time)}
+                  </div>
+                )}
                 <input
                   type="range"
                   min={0}
