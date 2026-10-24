@@ -36,6 +36,8 @@ import {
   VolumeX,
   Maximize2,
   Minimize2,
+  Expand,
+  Shrink,
   RotateCcw,
   RotateCw,
   Smartphone,
@@ -223,6 +225,11 @@ export const WatchView: React.FC = () => {
   const gainNodesRef = useRef<(GainNode | 'failed' | null)[]>([null, null]);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // 网页全屏：播放器 fixed 铺满浏览器视口（不接管屏幕，Esc 退出）。
+  // IAB 内嵌浏览器切原生全屏易导致渲染进程崩溃，此模式是无风险的大屏替代。
+  const [webFullscreen, setWebFullscreen] = useState(false);
+  const webFullscreenRef = useRef(false);
+  webFullscreenRef.current = webFullscreen;
   // 移动端防误触锁定：锁定后拦截播放器全部交互（暂停/进度/音量/控制栏），仅解锁按钮可点
   const [controlsLocked, setControlsLocked] = useState(false);
   const mobilePlayer = isMobileDevice();
@@ -683,6 +690,8 @@ export const WatchView: React.FC = () => {
     if (!player || !info || typeof ResizeObserver === 'undefined') return;
     const mq = window.matchMedia('(min-width: 1024px)');
     const apply = () => {
+      // 网页全屏时播放器脱离文档流铺满视口，信息卡（在覆盖层之下）不同步拉伸
+      if (webFullscreenRef.current) { info.style.height = ''; return; }
       // 仅大屏左右并排时齐高；移动端信息区在播放器上方独立成块，清掉内联高度防误压缩
       info.style.height = mq.matches ? `${player.offsetHeight}px` : '';
     };
@@ -918,6 +927,18 @@ export const WatchView: React.FC = () => {
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
+
+  const handleToggleWebFullscreen = () => setWebFullscreen((v) => !v);
+
+  // 网页全屏期间锁定页面滚动（播放器覆盖整个视口，背后的页面不应被滚走）
+  useEffect(() => {
+    if (!webFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [webFullscreen]);
+
+  // 离开播放页时网页全屏状态随组件卸载自然消失，无需额外清理
 
   // 全屏内切换横竖屏（仅移动端显示）
   const handleRotateOrientation = () => {
@@ -1562,6 +1583,12 @@ export const WatchView: React.FC = () => {
           setIsMuted(nv === 0);
           return nv;
         });
+      } else if (e.key === 'Escape') {
+        // 原生全屏下 Esc 由浏览器消费退出全屏；网页全屏由这里退出
+        if (webFullscreenRef.current && !document.fullscreenElement) {
+          e.preventDefault();
+          setWebFullscreen(false);
+        }
       } else if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         handleToggleFullscreen();
@@ -1807,7 +1834,9 @@ export const WatchView: React.FC = () => {
     // 弹窗挂在动画容器外：fadeInSlideBlur(forwards) 的 transform 会把容器变成
     // fixed 后代的包含块，DownloadPanel/选源弹窗的 fixed inset-0 会以它为基准而无法全局居中
     <>
-    <div id="watch-view" className="space-y-6 pb-20 animate-fade-blur">
+    {/* 网页全屏时去掉入场动画类：forwards 保留的 transform/filter 会成为 fixed 播放器的
+        包含块，让 fixed inset-0 以本容器（而非视口）为基准 */}
+    <div id="watch-view" className={`space-y-6 pb-20 ${webFullscreen ? '' : 'animate-fade-blur'}`}>
       {/* Top breadcrumb & back */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -1908,13 +1937,17 @@ export const WatchView: React.FC = () => {
             onMouseMove={mobilePlayer ? undefined : handleMouseMove}
             onMouseLeave={mobilePlayer ? undefined : () => isPlaying && setShowControls(false)}
             id="cine-video-player"
-            className={`relative w-full lg:flex-1 lg:min-w-0 aspect-video overflow-hidden bg-black group select-none ${
-              mobilePlayer && isFullscreen
-                ? 'rounded-none border-0 shadow-none'
-                : 'rounded-3xl border border-zinc-800/80 shadow-2xl'
-            }`}
+            className={
+              webFullscreen
+                ? 'fixed inset-0 z-[45] w-full h-full overflow-hidden bg-black group select-none rounded-none border-0 shadow-none'
+                : `relative w-full lg:flex-1 lg:min-w-0 aspect-video overflow-hidden bg-black group select-none ${
+                    mobilePlayer && isFullscreen
+                      ? 'rounded-none border-0 shadow-none'
+                      : 'rounded-3xl border border-zinc-800/80 shadow-2xl'
+                  }`
+            }
             style={{
-              boxShadow: mobilePlayer && isFullscreen
+              boxShadow: webFullscreen || (mobilePlayer && isFullscreen)
                 ? 'none'
                 : 'rgba(0, 0, 0, 0.8) 0px 30px 60px -12px, rgba(16, 185, 129, 0.2) 0px 0px 0px 1px',
             }}
@@ -2182,6 +2215,14 @@ export const WatchView: React.FC = () => {
                       <Smartphone className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform ${orientation === 'landscape' ? 'rotate-90' : ''}`} />
                     </button>
                   )}
+                  {/* 网页全屏：铺满浏览器视口但不接管屏幕（原生全屏在部分内嵌浏览器会崩溃） */}
+                  <button
+                    onClick={handleToggleWebFullscreen}
+                    className="p-1 sm:p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white transition-colors"
+                    title={webFullscreen ? '退出网页全屏 (Esc)' : '网页全屏：铺满浏览器窗口，不接管屏幕 (Esc 退出)'}
+                  >
+                    {webFullscreen ? <Shrink className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Expand className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
+                  </button>
                   {/* Fullscreen Toggle */}
                   <button
                     onClick={handleToggleFullscreen}
