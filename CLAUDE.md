@@ -113,6 +113,7 @@ Python FastAPI app in `manage/`:
 - 智能选源：进播放页/详情页自动 `POST /api/resource/scan`（候选=命中站点×线路×第 1 集，站点去重上限 15、每站线路上限 8）→ SSE 渐进收结果 → 线路/站点徽章（速度/清晰度/广告）；扫描完成自动切到推荐源（当前源失败/有广告或推荐源综合分领先 >0.15 才切，保留进度与集数），用户手动换源后本影片不再自动切；`selectMatch`/`selectFlag` 的 `manual` 参数为 false 时表示程序自动切换（不标记 userPicked）；`web/src/utils/scanFormat.ts` 徽章文案共用
 - 详情页站点分组：详情页不再展示选源/选集（只有资源状态提示行），站点五组分类（推荐/有广告/时长异常/网盘/探测失败）改由播放页的选源弹窗展示——分类逻辑在 `web/src/utils/siteGroups.ts` 的 `classifySites`（时长异常=中位数 0.45~2.2 倍偏离+电影 <40min 绝对下限；网盘=扫码登录或夸父等特征），弹窗组件 `web/src/components/SourcePickerModal.tsx`（扫描中渐进展示部分结果）
 - 播放页布局：播放器下方是「当前线路按钮（站点·线路+三维度徽章，点击开选源弹窗）+ 扫描进度 + 当前线路选集按钮网格」；侧栏仅保留猜你喜欢；换源经 `applySource(siteKey, flag?, manual?)`（同站切 flag / 跨站重拉详情后切，携带播放位置，集数按 number 延续）
+- 时效地址自愈（`WatchView.tsx` + `mediaHandoff.ts`）：上游有两类时效——选集 playUrl 令牌（详情接口下发，web 端选站后缓存在 `resource.flags`）与解析出的 m3u8/分片/密钥 CDN 签名（30min~2h）。恢复策略一律"先同线续期再换线、令牌过期永不写会话拉黑"：分片/密钥 401/402/403/404/410/419 第二次失败触发 `refreshCurrentLine`（重新解析、保进度保暂停态，2min 内连环 2 次转 autoRecover）；`EPISODE_TOKEN_EXPIRED_RE` 类错误重拉详情换新 token（连续 3 次失败才降级换线且不拉黑）；暂停 >15min（`PLAY_URL_STALE_MS`）恢复播放先静默续期；`handleSwitchEpisode` 切集前先重拉详情换新 token。app 端无此问题一半——每次切集/换线/进详情都实时 `SiteApi.playerContent` 重解析，但播放中长暂停后的分片过期同样存在（ExoPlayer 重试同一旧地址 3 次后报错，靠手动重试重新解析恢复）
 - subjects 表是统一影片注册表（豆瓣种子 + 资源反填），收藏/历史按 subject_id 关联；安卓端零改动
 
 ## Key Dependencies

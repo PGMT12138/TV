@@ -12,8 +12,10 @@ export function playbackHlsConfig(warm = false, startPosition = -1): Partial<Hls
     backBufferLength: warm ? 10 : 180,
     fragLoadPolicy: { default: { ...policy, errorRetry: {
       ...policy.errorRetry!,
+      // 402/404/410 是确定性的鉴权失败/对象清理（402 见 probe.py：部分 CDN 鉴权
+      // 拒绝回 402），重试无意义只拖慢同线续期，一次重试后交给上层处理
       shouldRetry: (config, count, timeout, response, retry) =>
-        response?.code === 404 || response?.code === 410 ? count < 1 : retry,
+        [402, 404, 410].includes(response?.code || 0) ? count < 1 : retry,
     } } },
   };
 }
@@ -28,8 +30,12 @@ export function isFileMedia(source: { play?: string; url?: string }, kind?: stri
 }
 
 export function missingFragment(data: ErrorData, attempts: Map<string, number>): { url: string; start: number } | undefined {
-  // 403 一并计入：mgtv 等 CDN 分片签名过期回 403（对象清理后回 404），同属分片失效
-  if (data.details !== Hls.ErrorDetails.FRAG_LOAD_ERROR || ![403, 404, 410].includes(data.response?.code || 0)) return;
+  // 分片/密钥鉴权失效的典型状态码：403/404/410 常见（mgtv 等 CDN 分片签名过期回 403，
+  // 对象清理后回 404），402 为部分 CDN 的鉴权拒绝码（probe 实测咖啡4K/玫瑰4K），
+  // 401/419 一并按"可续期失效"处理——误判代价只是一次同线重新解析
+  const loadError = data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR
+    || data.details === Hls.ErrorDetails.KEY_LOAD_ERROR;
+  if (!loadError || ![401, 402, 403, 404, 410, 419].includes(data.response?.code || 0)) return;
   const url = data.frag?.url || data.response?.url || '';
   const count = (attempts.get(url) || 0) + 1;
   attempts.set(url, count);

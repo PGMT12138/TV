@@ -28,6 +28,10 @@ const EPISODE_TOKEN_EXPIRED_RE = /令牌可能已过期|选集令牌/;
 // 原生 HLS 路径（iPhone 等）不接管音频通道，上限保持 100%
 const VOLUME_CAP = Hls.isSupported() ? 2 : 1;
 
+// 解析出的播放地址时效阈值：上游 CDN 的分片/密钥签名常见 30min~2h。暂停超过该
+// 时长后恢复播放，直接续用旧地址必然在缓冲耗尽后报错换线——先同线重新解析再续播
+const PLAY_URL_STALE_MS = 15 * 60 * 1000;
+
 import {
   Play,
   Pause,
@@ -59,7 +63,7 @@ import {
 } from 'lucide-react';
 
 type PlayerResponse = Awaited<ReturnType<typeof api.player>>;
-type PreparedPlayer = { key: string; data: PlayerResponse };
+type PreparedPlayer = { key: string; data: PlayerResponse; at: number };
 type UpgradeAttempt = {
   stage: 'during' | 'final'; key: string; committed: boolean; cancelled?: boolean;
   previous: { resource: ResourceState; episode: Episode | null; position: number; paused: boolean; player?: PreparedPlayer };
@@ -180,6 +184,8 @@ export const WatchView: React.FC = () => {
   const keepPausedRef = useRef(false);
   const rollbackUpgradeRef = useRef<() => boolean>(() => false);
   const upgradeSourceRef = useRef<(stage: 'during' | 'final', candidate: ScanCandidateResult) => void>(() => {});
+  // 同线续期（长暂停恢复/分片过期时重新解析当前线路，保进度保暂停态）
+  const refreshCurrentLineRef = useRef<() => boolean>(() => false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -188,8 +194,9 @@ export const WatchView: React.FC = () => {
   const playbackWatchdogRef = useRef<number | null>(null);
   // 选集令牌过期自动换新：部分采集站 playUrl 带时效 token，页面停留超时后播放/
   // 探测都会失败（App 端每次进详情都拿新 token 所以无感）。失败后重拉一次详情
-  // 换新令牌自动重试；按站点+线路 30s 防抖，避免线路真挂了时无限刷新
-  const tokenRefreshRef = useRef<{ key: string; t: number } | null>(null);
+  // 换新令牌自动重试。令牌类错误不设时间防抖（重拉详情必得新 token，与线路真死
+  // 不同），按站点+线路连续失败次数（n≥3）兜底降级换线；成功起播即清零
+  const tokenRefreshRef = useRef<{ key: string; t: number; n: number } | null>(null);
   const failedSourceKeysRef = useRef<Set<string>>(new Set());
   const recoveryBusyRef = useRef(false);
   const recoveryGenerationRef = useRef(0);
@@ -491,7 +498,7 @@ export const WatchView: React.FC = () => {
         if (res.error) throw new Error(res.error);
         const src = res.play || res.url;
         if (!src) throw new Error('未获取到播放地址');
-        loadedPlayerRef.current = { key: playerKey, data: res };
+        loadedPlayerRef.current = { key: playerKey, data: res, at: Date.now() };
         // 判定反转：只排除明确的文件直链（mp4/mkv 等），其余一律走 hls.js——大量线路入口是
         // php/无后缀地址（如 m3u8.meilinvps.com/m3u8/32641）302 到 CDN m3u8，后端按后缀
         // 误判 hls=false 后经 video.src 原生挂载，Chromium 不支持原生 HLS 会永远卡加载。
@@ -543,16 +550,22 @@ export const WatchView: React.FC = () => {
           if (rollbackUpgradeRef.current()) return;
           setBuffering(false);
           const msg = String(e?.message || '播放地址获取失败');
+          const tokenExpired = EPISODE_TOKEN_EXPIRED_RE.test(msg);
+          const deviceOffline = /设备未连接|device offline/i.test(msg);
           // 令牌过期类失败：重拉站点详情换新选集 token 自动重试（重拉后集 id 变化、
-          // 按集数号延续进度，播放效果会自动重新起播）。设备离线重拉无意义，跳过
+          // 按集数号延续进度，播放效果会自动重新起播）。设备离线重拉无意义，跳过。
+          // 令牌类不受 30s 防抖限制——它不是线路死亡，防抖内二次失败直接换线会把
+          // 健康线路误拉黑；仅按连续失败次数（≥3）降级换线，且换线不拉黑当前线
           const refreshKey = `${selectedMatch.siteKey}:${activeLine.flag}`;
           const last = tokenRefreshRef.current;
-          const mayRefresh =
-            !/设备未连接|device offline/i.test(msg) &&
-            (!last || last.key !== refreshKey || Date.now() - last.t > 30_000);
+          const streak = last?.key === refreshKey ? last.n : 0;
+          const mayRefresh = !deviceOffline && (tokenExpired ? streak < 3
+            : (!last || last.key !== refreshKey || Date.now() - last.t > 30_000));
           if (mayRefresh) {
-            tokenRefreshRef.current = { key: refreshKey, t: Date.now() };
-            showToast('线路选集令牌已过期，正在刷新线路重试…', 'info');
+            tokenRefreshRef.current = { key: refreshKey, t: Date.now(), n: streak + 1 };
+            showToast(tokenExpired
+              ? '线路选集令牌已过期，正在刷新线路重试…'
+              : '线路解析失败，正在重新获取选集重试…', 'info');
             setPlayerLoading(true);
             try {
               const flags = await selectMatch(movieId, selectedMatch, false);
@@ -578,13 +591,17 @@ export const WatchView: React.FC = () => {
               }
             } catch { /* 重拉失败走下面的错误展示 */ }
           }
-          const recovered = /设备未连接|device offline/i.test(msg)
+          // 令牌类降级换线时不拉黑当前线（markCurrent=false）：地址过期不是线路失效，
+          // 详情重拉即可恢复，拉黑会让选源弹窗里整站线路显示"会话不可用"
+          const recovered = deviceOffline
             ? false
-            : await autoRecoverRef.current(msg);
+            : await autoRecoverRef.current(msg, !tokenExpired);
           if (!recovered) {
             setPlayerError(
-              /设备未连接|device offline/i.test(msg)
+              deviceOffline
                 ? '播放设备不在线，打开 App 后点击重试'
+                : tokenExpired && streak >= 3
+                ? '该站选集令牌持续过期，已尝试切换其它来源'
                 : msg
             );
           }
@@ -723,6 +740,16 @@ export const WatchView: React.FC = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
       keepPausedRef.current = false;
+      // 暂停超过播放地址时效阈值（CDN 分片/密钥签名大概率已过期）：直接恢复会在
+      // 缓冲耗尽后报错并被迫换线；先同线重新解析（保进度、无感衔接）再自动续播。
+      // 续期被防抖拒绝（刚续期过/连续失效保护）时按普通恢复处理
+      if (Date.now() - (loadedPlayerRef.current?.at || 0) > PLAY_URL_STALE_MS
+          && refreshCurrentLineRef.current()) {
+        // refreshCurrentLine 按"当前处于暂停"保留暂停态，恢复场景改为自动续播
+        keepPausedRef.current = false;
+        setIsPlaying(true);
+        return;
+      }
       videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
     } else {
       keepPausedRef.current = true;
@@ -948,7 +975,7 @@ export const WatchView: React.FC = () => {
     showToast(next === 'landscape' ? '已切换为横屏' : '已切换为竖屏', 'info');
   };
 
-  const handleSwitchEpisode = (ep: Episode) => {
+  const handleSwitchEpisode = async (ep: Episode) => {
     if (ep.id === currentEpisode?.id) return;
     recoveryGenerationRef.current++;
     recoveryBusyRef.current = false;
@@ -963,13 +990,35 @@ export const WatchView: React.FC = () => {
     setSelectionBusy(false);
     keepPausedRef.current = false;
     resumeRef.current = 0;
-    setCurrentEpisode(ep);
+    // 选站时缓存的选集 id 带时效 token，长时间观看后过期：切集前先静默重拉详情换新
+    // token（按集数号定位目标集）。重拉失败/无线路则按旧选集直切，播放失败仍会走
+    // 令牌刷新兜底——切集本就不频繁，每集多一次详情请求换来不再"先失败再恢复"
+    let target = ep;
+    let refreshed = false;
+    if (selectedMatch && resource?.status === 'ready') {
+      try {
+        const flags = await selectMatch(movieId, selectedMatch, false);
+        if (flags?.length) {
+          const idx = flags.findIndex((f) => f.flag === activeLine?.flag);
+          if (idx > 0) selectFlag(movieId, idx, false);
+          const nextFlag = flags[idx >= 0 ? idx : 0];
+          const matched = nextFlag.episodes.find((e) => e.number === ep.number)
+            || nextFlag.episodes[Math.min(ep.number, nextFlag.episodes.length) - 1];
+          if (matched) {
+            target = matched;
+            refreshed = true;
+          }
+        }
+      } catch { /* 重拉失败按旧选集直切 */ }
+    }
+    setCurrentEpisode(target);
     setCurrentTime(0);
-    if (videoRef.current) {
+    // 重拉路径下旧视频即将被换源，别让它在起播前重播旧内容；直切路径保持原行为
+    if (!refreshed && videoRef.current) {
       videoRef.current.currentTime = 0;
       videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
     }
-    showToast(`已切换至《${ep.title}》`, 'info');
+    showToast(`已切换至《${target.title}》`, 'info');
   };
 
   const handleEnded = () => {
@@ -1191,7 +1240,7 @@ export const WatchView: React.FC = () => {
         pending.previous.paused = paused;
         pending.committed = true;
       }
-      const prepared = { key: `${siteKey}::${flags[index].flag}::${episode.id}`, data };
+      const prepared = { key: `${siteKey}::${flags[index].flag}::${episode.id}`, data, at: Date.now() };
       if (warmed && oldVideo) {
         const oldHls = hlsRef.current;
         const nextSlot = 1 - activeSlotRef.current;
@@ -1243,13 +1292,16 @@ export const WatchView: React.FC = () => {
         failureReason = error instanceof Error ? error.message : '该线路未能正常起播';
       return false;
     } finally {
-      // 桥接/服务不可用类失败不写入会话级拉黑：不是线路本身的问题，设备恢复后应允许重试
-      if (!committed && failureReason && !BRIDGE_OUTAGE_RE.test(failureReason) && valid() && !controller.signal.aborted && match && !pendingUpgradeRef.current?.cancelled)
+      // 桥接/服务不可用与选集令牌过期类失败都不写入会话级拉黑：前者不是线路问题，
+      // 后者重拉详情即可恢复——拉黑会让选源弹窗里健康线路显示"不可用"
+      if (!committed && failureReason && !BRIDGE_OUTAGE_RE.test(failureReason)
+          && !EPISODE_TOKEN_EXPIRED_RE.test(failureReason)
+          && valid() && !controller.signal.aborted && match && !pendingUpgradeRef.current?.cancelled)
         markSessionLineFailure({ movieId, siteKey, vodId: match.vodId, flag: targetFlag, reason: failureReason });
       if (!committed) warmed?.destroy();
       if (standbyAbortRef.current === controller) standbyAbortRef.current = null;
       setSwitchingTarget((target) => target?.request === request
-        ? (committed && !warmSwitch ? { ...target, awaitingPlayback: true } : null) : target);
+        ? (committed && !warmSwitch ? { ...target, awaitingPlayback: true } : target) : target);
       if (valid() && warmSwitch) setSelectionBusy(false);
       if (manual && valid()) {
         setSelectionBusy(false);
@@ -1257,6 +1309,8 @@ export const WatchView: React.FC = () => {
           manualSelectionRef.current = false;
           showToast(BRIDGE_OUTAGE_RE.test(failureReason)
             ? '设备桥接不可用，本次切换未完成；线路未标记失效，设备恢复后可重试'
+            : EPISODE_TOKEN_EXPIRED_RE.test(failureReason)
+            ? '目标线路选集令牌已过期且刷新未成功，稍后重试即可，当前播放保留'
             : '目标线路无法播放，已标记本次会话不可用，当前播放保留', 'warning');
           if (currentFailureRef.current?.video === videoRef.current)
             void autoRecoverRef.current(currentFailureRef.current.reason);
@@ -1344,7 +1398,9 @@ export const WatchView: React.FC = () => {
       && latestSelectionRef.current.movieId === movieId && latestSelectionRef.current.resource?.searchStartedAt === run;
     const selected = resource.selected;
     const line = resource.flags[resource.activeFlagIndex] || resource.flags[0];
-    if (markCurrent && selected && line) {
+    // 选集令牌过期不是线路失效（详情重拉即可恢复）：换线降级时不写入会话拉黑，
+    // 否则长时间观看后整站线路会被逐条误标"本次会话不可用"
+    if (markCurrent && !EPISODE_TOKEN_EXPIRED_RE.test(reason) && selected && line) {
       markSessionLineFailure({ movieId, siteKey: selected.siteKey, vodId: selected.vodId, flag: line.flag, reason });
       failedSourceKeysRef.current.add(`${selected.siteKey}::${selected.vodId}::${line.flag}::${currentEpisode?.number || 1}`);
     }
@@ -1450,6 +1506,7 @@ export const WatchView: React.FC = () => {
     setPlayNonce((n) => n + 1);
     return true;
   };
+  refreshCurrentLineRef.current = refreshCurrentLine;
 
   activeHlsErrorRef.current = (hls, video, data, missing) => {
     if (hlsRef.current !== hls || videoRef.current !== video) return;
@@ -1500,6 +1557,7 @@ export const WatchView: React.FC = () => {
   const handlePlaying = () => {
     setSwitchingTarget((target) => target?.awaitingPlayback && target.siteKey === selectedMatch?.siteKey && target.flag === activeLine?.flag ? null : target);
     hasPlayedRef.current = true;
+    tokenRefreshRef.current = null; // 成功起播：选集令牌连续失败计数清零
     setIsPlaying(!videoRef.current?.paused);
     setBuffering(false);
     // 增益链路兜底：浏览器 autoplay 策略会挂起新建 AudioContext，播放恢复时确保运行
