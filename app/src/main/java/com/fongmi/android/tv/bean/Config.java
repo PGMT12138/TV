@@ -101,7 +101,14 @@ public class Config {
 
     public static Config manage() {
         Config item = AppDatabase.get().getConfigDao().findOne(3);
-        return item == null ? create(3) : item;
+        return item == null ? seedManage() : item;
+    }
+
+    /** 内置管理端地址：全新安装首次访问时自动播种为默认地址；用户手动清空或更换后不再自动恢复 */
+    private static Config seedManage() {
+        if (Prefers.getBoolean("manage_seeded")) return create(3);
+        Prefers.put("manage_seeded", true);
+        return create(3, "http://43.136.46.175:8680/tv-manage/");
     }
 
     /** 管理端聚合接口地址（type=0 vod / 1 live）：manage 地址带 ? 视为已含 api/urls 路径（取问号前），
